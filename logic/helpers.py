@@ -1,4 +1,4 @@
-"""Sichere Typumwandlungen. Importiert NIEMALS streamlit oder supabase!"""
+"""Sichere Typumwandlungen und Hilfsfunktionen. Importiert NIEMALS streamlit oder supabase!"""
 import re
 import unicodedata
 from datetime import date, datetime
@@ -123,6 +123,36 @@ def normalize_df_cols(df):
     df = df.copy()
     df.columns = [normalize_col(c) for c in df.columns]
     return df
+
+
+def coalesce(df, candidates, to_name):
+    """Benennt die erste gefundene Kandidaten-Spalte in to_name um (wie Original)."""
+    for cand in candidates:
+        if cand in df.columns:
+            return df.rename(columns={cand: to_name})
+    for c in df.columns:
+        for cand in candidates:
+            if cand in c:
+                return df.rename(columns={c: to_name})
+    return df
+
+
+def drop_empty_rows(df):
+    return df.dropna(how="all").reset_index(drop=True)
+
+
+def get_valid_fahrzeug_optionen(fahrzeuge_df):
+    """Liefert ein Dict {bezeichnung: id} nur für Fahrzeuge mit gültigem Namen (wie Original)."""
+    valid = {}
+    if fahrzeuge_df is None or fahrzeuge_df.empty:
+        return valid
+    for _, row in fahrzeuge_df.iterrows():
+        bez = row.get('bezeichnung')
+        if bez is not None and pd.notna(bez):
+            bez_str = str(bez).strip()
+            if bez_str and bez_str.lower() not in ('none', 'nan', ''):
+                valid[bez_str] = int(row['id']) if pd.notna(row.get('id')) else None
+    return valid
 
 
 def extrahiere_ort(adresse):
