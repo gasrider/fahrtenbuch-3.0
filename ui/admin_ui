@@ -1,19 +1,25 @@
 """Admin-Bereich: Systemkonfiguration (SMTP + Testmail + Supabase-Info + Spam-Hinweise),
 Benutzerverwaltung (PW-Reset, E-Mail), Daten ansehen. Admins: Secrets oder 'christian mayerhofer'."""
-import hashlib
 import os
 
-import pandas as pd
 import streamlit as st
 
 from database import DatabaseError
 from database.system_config import load_system_config, save_system_config
-from database.users import all_usernames, update_password, set_user_email
-from database.settings import load_settings, load_settings as _ls
+from database.users import (all_usernames, update_password, set_user_email,
+                            get_user_email)
+from database.settings import load_settings
 from database.fahrzeuge import load_fahrzeuge
 from services.email import send_reset_email, get_smtp_settings
 
-ADMIN_FALLBACK = ["christian mayerhofer"]  # wie Original
+ADMIN_FALLBACK = ["christian mayerhofer"]  # wie im Original
+
+
+def _secret(key):
+    try:
+        return st.secrets.get(key, "")
+    except Exception:
+        return ""
 
 
 def _is_admin(username) -> bool:
@@ -32,7 +38,7 @@ def render(username):
     tab_cfg, tab_users, tab_data = st.tabs([
         "⚙️ Systemkonfiguration", "👥 Benutzerverwaltung", "📊 Daten ansehen"])
 
-    # ---------- TAB 1 ----------
+    # ---------- TAB 1: SYSTEMKONFIGURATION ----------
     with tab_cfg:
         st.subheader("📧 E-Mail / SMTP Konfiguration")
         st.caption("Zugangsdaten für den E-Mail-Versand (Passwort-Reset). Ohne Werte werden "
@@ -52,8 +58,14 @@ def render(username):
             cfg_user = st.text_input("SMTP Benutzer / E-Mail", value=current_smtp.get("user", ""))
             cfg_password = st.text_input("SMTP Passwort", value="", type="password",
                                          help="App-Passwort verwenden, nicht das normale Login-Passwort!")
-        cfg_from = st.text_input("Absendername", value=current_smtp.get("from_name", "Fahrtenbuch System"))
-        st.caption(f"Aktuelle SMTP-Quelle: **{'Datenbank' if current_config.get('smtp_server') else 'Umgebungsvariablen/Secrets' if os.environ.get('SMTP_SERVER') or _secret('SMTP_SERVER') else 'nicht konfiguriert'}**")
+        cfg_from = st.text_input("Absendername",
+                                 value=current_smtp.get("from_name", "Fahrtenbuch System"))
+        quelle = ("Datenbank" if current_config.get("smtp_server")
+                  else "Umgebungsvariablen/Secrets"
+                  if (os.environ.get("SMTP_SERVER") or _secret("SMTP_SERVER"))
+                  else "nicht konfiguriert")
+        st.caption(f"Aktuelle SMTP-Quelle: **{quelle}**")
+
         col_s, col_t = st.columns(2)
         with col_s:
             if st.button("💾 SMTP-Einstellungen speichern"):
@@ -64,7 +76,8 @@ def render(username):
                     st.success("SMTP-Einstellungen gespeichert!")
                     st.rerun()
         with col_t:
-            test_email = st.text_input("Test-E-Mail an", help="Eine Test-Nachricht an diese Adresse senden.")
+            test_email = st.text_input("Test-E-Mail an",
+                                       help="Eine Test-Nachricht an diese Adresse senden.")
             if st.button("📧 Test-E-Mail senden"):
                 if not test_email or "@" not in test_email:
                     st.error("Bitte eine gültige E-Mail-Adresse eingeben.")
@@ -78,7 +91,9 @@ def render(username):
                         st.success(f"Test-E-Mail erfolgreich an {test_email} gesendet! "
                                    "Prüfe Posteingang und Spam-Ordner.")
                     else:
-                        st.error("Test-E-Mail konnte NICHT gesendet werden. Prüfe SMTP-Einstellungen und App-Passwort.")
+                        st.error("Test-E-Mail konnte NICHT gesendet werden. "
+                                 "Prüfe SMTP-Einstellungen und App-Passwort.")
+
         st.markdown("---")
         st.subheader("🗄️ Supabase-Verbindung (nur Anzeige)")
         url_disp = os.environ.get("SUPABASE_URL") or _secret("SUPABASE_URL") or "(nicht gesetzt)"
@@ -87,6 +102,7 @@ def render(username):
         k1, k2 = st.columns(2)
         k1.text_input("Supabase URL", value=url_disp, disabled=True)
         k2.text_input("Supabase Key", value=key_disp, disabled=True)
+
         with st.expander("ℹ️ Hinweise: E-Mails landen im Spam – was tun?"):
             st.markdown("""**Code-Ebene (bereits optimiert):** X-Priority entfernt, Reply-To gesetzt,
 korrekte Message-ID, nur Plain-Text, professioneller Absendername.
@@ -97,29 +113,31 @@ korrekte Message-ID, nur Plain-Text, professioneller Absendername.
 3. **DMARC-Policy**: sagt Empfängern, wie mit E-Mails ohne SPF/DKIM umzugehen ist
 
 **Empfehlung:** Für GMX SPF/DKIM/DMARC über GMX-Admin einrichten. Bessere Alternative:
-ein Transaktions-E-Mail-Dienst wie **SendGrid**, **Mailgun** oder **Resend** (Spam-Einstellungen fertig konfiguriert).""")
+ein Transaktions-E-Mail-Dienst wie **SendGrid**, **Mailgun** oder **Resend**.""")
 
-    # ---------- TAB 2 ----------
+    # ---------- TAB 2: BENUTZERVERWALTUNG ----------
     with tab_users:
         st.subheader("Passwort eines Users zurücksetzen")
         try:
             users = all_usernames()
         except DatabaseError as e:
-            st.error(str(e)); return
+            st.error(str(e)); users = []
         if users:
             sel = st.selectbox("User auswählen", users)
             new_pw = st.text_input("Neues Passwort für diesen User", type="password")
             if st.button("🔑 Passwort jetzt ändern"):
                 if new_pw:
                     update_password(sel, new_pw, force_change=True)
-                    st.success(f"Passwort für **{sel}** geändert. User muss bei nächstem Login "
-                               "ein neues Passwort setzen.")
+                    st.success(f"Passwort für **{sel}** geändert. User muss bei nächstem "
+                               "Login ein neues Passwort setzen.")
                 else:
                     st.warning("Bitte ein neues Passwort eingeben.")
             st.markdown("---")
             st.subheader("📧 E-Mail-Adresse verwalten (für Passwort-Reset)")
-            from database.users import get_user_email
-            cur = get_user_email(sel)
+            try:
+                cur = get_user_email(sel)
+            except DatabaseError as e:
+                st.error(str(e)); cur = ""
             ne = st.text_input("E-Mail-Adresse eintragen/ändern", value=cur)
             if st.button("💾 E-Mail speichern"):
                 if ne and "@" in ne:
@@ -131,12 +149,12 @@ ein Transaktions-E-Mail-Dienst wie **SendGrid**, **Mailgun** oder **Resend** (Sp
         else:
             st.info("Keine Benutzer vorhanden.")
 
-    # ---------- TAB 3 ----------
+    # ---------- TAB 3: DATEN ANSEHEN ----------
     with tab_data:
         try:
             users = all_usernames()
         except DatabaseError as e:
-            st.error(str(e)); return
+            st.error(str(e)); users = []
         if users:
             sel = st.selectbox("User-Daten anzeigen", users, key="admin_data_user")
             st.subheader(f"📊 Daten von {sel}")
@@ -155,10 +173,3 @@ ein Transaktions-E-Mail-Dienst wie **SendGrid**, **Mailgun** oder **Resend** (Sp
                     st.dataframe(fz) if not fz.empty else st.info("Noch keine Fahrzeuge hinterlegt.")
                 except DatabaseError as e:
                     st.error(str(e))
-
-
-def _secret(key):
-    try:
-        return st.secrets.get(key, "")
-    except Exception:
-        return ""
