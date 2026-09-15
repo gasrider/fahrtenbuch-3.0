@@ -121,3 +121,30 @@ def keywords_aus_text(text: str) -> pd.DataFrame:
             for z in zwecke:
                 kw_list.append({"Ort": ort, "Zweck": z})
     return pd.DataFrame(kw_list, columns=["Ort", "Zweck"])
+def lade_orte(file) -> pd.DataFrame:
+    """Orte aus Excel/CSV (tolerant: 'Ort', 'Adresse', 'Ziel', 'Kunde', 'Werkstattort')."""
+    name = str(getattr(file, "name", "")).lower()
+    if name.endswith(".csv"):
+        try:
+            raw = pd.read_csv(file, sep=None, engine="python")
+        except UnicodeDecodeError:
+            file.seek(0)
+            raw = pd.read_csv(file, sep=None, engine="python", encoding="latin-1")
+    else:
+        raw = pd.read_excel(file)
+    df = normalize_df_cols(raw)
+    col = None
+    for cand in ["ort", "ortsname", "adresse", "ziel", "kunde", "werkstattort"]:
+        if cand in df.columns:
+            col = cand
+            break
+    if col is None:
+        for c in df.columns:
+            if any(k in c for k in ("ort", "ziel", "kunde")):
+                col = c
+                break
+    if col is None:
+        raise ValueError("Keine Ort-Spalte erkannt – benötigt: 'Ort' (oder 'Adresse'/'Ziel').")
+    vals = [str(v).strip() for v in df[col].tolist()
+            if str(v).strip() and str(v).strip().lower() not in ("none", "nan")]
+    return pd.DataFrame({"Ort": list(dict.fromkeys(vals))})
