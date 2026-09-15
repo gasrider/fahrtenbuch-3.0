@@ -1,9 +1,11 @@
-"""Login, Registrierung, Passwort vergessen, erzwungener Passwortwechsel."""
+"""Login, Registrierung, Passwort vergessen (nur Benutzername), erzwungener Passwortwechsel."""
 import streamlit as st
+import secrets
 
 from database import DatabaseError
-from database.users import add_user, verify_user, find_user, update_password
-from services.email import send_reset_email, generate_random_password
+from database.users import (add_user, verify_user, update_password,
+                            reset_password_by_username)
+from services.email import send_reset_email
 
 
 def render_login():
@@ -11,25 +13,24 @@ def render_login():
     st.session_state.setdefault("username", "")
     st.session_state.setdefault("force_pw_change_flow", False)
 
-    # Erzwungener Passwortwechsel direkt nach Login
     if st.session_state.get("force_pw_change_flow"):
         st.title("🔑 Passwort ändern")
         st.warning("Sicherheitshinweis: Sie müssen Ihr Passwort vor der ersten Nutzung ändern!")
         with st.form("force_change_form"):
             p1 = st.text_input("Neues Passwort", type="password")
-            p2 = st.text_input("Neues Passwort wiederholen", type="password")
-            if st.form_submit_button("Passwort ändern", type="primary"):
-                if len(p1) < 8:
-                    st.error("Passwort muss mindestens 8 Zeichen lang sein.")
-                elif p1 != p2:
-                    st.error("Passwörter stimmen nicht überein.")
+            p2 = st.text_input("Neues Passwort bestätigen", type="password")
+            if st.form_submit_button("Passwort speichern und einloggen"):
+                if p1 != p2:
+                    st.error("Die Passwörter stimmen nicht überein!")
+                elif len(p1) < 4:
+                    st.error("Passwort muss mindestens 4 Zeichen haben.")
                 else:
                     try:
-                        update_password(st.session_state["temp_username"], p1,
-                                        force_change=False)
+                        update_password(st.session_state["temp_username"], p1, force_change=False)
                         st.session_state.logged_in = True
                         st.session_state.username = st.session_state["temp_username"]
                         st.session_state.force_pw_change_flow = False
+                        st.success("Passwort erfolgreich geändert! Willkommen.")
                         st.rerun()
                     except DatabaseError as e:
                         st.error(str(e))
@@ -60,39 +61,34 @@ def render_login():
                     st.error("Falsche Zugangsdaten")
 
     with tab2:
-        nu = st.text_input("Benutzername", key="reg_user")
-        ne = st.text_input("E-Mail", key="reg_email")
-        np1 = st.text_input("Passwort (min. 8 Zeichen)", type="password", key="reg_pw1")
-        np2 = st.text_input("Passwort wiederholen", type="password", key="reg_pw2")
-        if st.button("Registrieren"):
-            if not nu or not ne or not np1:
-                st.error("Bitte alle Felder ausfüllen.")
-            elif np1 != np2:
-                st.error("Passwörter stimmen nicht überein.")
-            elif len(np1) < 8:
-                st.error("Passwort muss mindestens 8 Zeichen lang sein.")
+        nu = st.text_input("Neuer Benutzername", key="reg_user")
+        ne = st.text_input("Ihre E-Mail-Adresse", key="reg_email")
+        np1 = st.text_input("Neues Passwort", type="password", key="reg_pw")
+        if st.button("Account erstellen"):
+            if not ne or "@" not in ne:
+                st.error("Bitte geben Sie eine gültige E-Mail-Adresse an.")
             else:
                 try:
                     add_user(nu, np1, ne)
-                    st.success("Registrierung erfolgreich! Sie können sich jetzt anmelden.")
+                    st.success("Account erstellt! Bitte loggen Sie sich ein.")
                 except DatabaseError as e:
                     st.error(str(e))
 
     with tab3:
-        fu = st.text_input("Benutzername", key="pw_user")
-        fe = st.text_input("E-Mail", key="pw_email")
-        if st.button("Neues Passwort per E-Mail anfordern"):
-            try:
-                found = find_user(fu, fe)
-                if not found:
-                    st.error("Kein Benutzer mit dieser Kombination gefunden.")
-                else:
-                    new_pw = generate_random_password()
-                    update_password(fu, new_pw, force_change=True)
-                    if send_reset_email(fe, new_pw):
-                        st.success("E-Mail gesendet! Bitte Postfach prüfen.")
+        st.info("Geben Sie Ihren Benutzernamen ein. Das System sendet Ihnen dann sofort "
+                "ein neues, sicheres Passwort an Ihre hinterlegte E-Mail-Adresse.")
+        ru = st.text_input("Ihr Benutzername", key="reset_user_req")
+        if st.button("📧 Neues Passwort anfordern"):
+            if not ru:
+                st.warning("Bitte Benutzernamen eingeben.")
+            else:
+                try:
+                    new_pw = secrets.token_urlsafe(8)
+                    email = reset_password_by_username(ru, new_pw)
+                    if send_reset_email(email, new_pw):
+                        st.success("Ein neues Passwort wurde an Ihre E-Mail-Adresse gesendet! "
+                                   "Bitte prüfen Sie auch Ihren Spam-Ordner.")
                     else:
-                        st.error("E-Mail-Versand fehlgeschlagen. "
-                                 "Bitte Administrator informieren (SMTP-Einstellungen).")
-            except DatabaseError as e:
-                st.error(str(e))
+                        st.error("Fehler beim Senden der E-Mail. Bitte kontaktieren Sie den Admin.")
+                except DatabaseError as e:
+                    st.error(str(e))

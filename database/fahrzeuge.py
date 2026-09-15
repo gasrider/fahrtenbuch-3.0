@@ -62,3 +62,12 @@ def load_fahrzeuge(username) -> pd.DataFrame:
     except Exception as e:
         raise DatabaseError(f"Fahrzeuge laden fehlgeschlagen: {e}") from e
     return pd.DataFrame(columns=DEFAULT_VEHICLES_COLUMNS)
+def update_start_km(username, current_km: dict) -> bool:
+    """Speichert Endkilometerstände als start_km_vorjahr (wie Original nach Jahresgenerierung)."""
+    try:
+        for fz_id, km in current_km.items():
+            supabase.table("fahrzeuge").update({"start_km_vorjahr": int(km)}) \
+                .eq("id", int(fz_id)).eq("username", username).execute()
+        return True
+    except Exception as e:
+        raise DatabaseError(f"Endkilometer speichern fehlgeschlagen: {e}") from e

@@ -1,4 +1,4 @@
-"""E-Mail-Versand (Passwort-Reset). SMTP zuerst aus DB, Fallback Umgebungsvariablen."""
+"""E-Mail-Versand (Passwort-Reset & Testmail). SMTP zuerst aus DB, Fallback Secrets/Env."""
 import os
 import secrets
 import smtplib
@@ -29,23 +29,22 @@ def generate_random_password(length=12) -> str:
             return pw
 
 
-def send_reset_email(to_email, new_plain_password) -> bool:
-    """Sendet eine Passwort-Reset-E-Mail. True bei Erfolg."""
+def send_reset_email(to_email, new_plain_password, smtp_settings=None) -> bool:
+    """True bei Erfolg. smtp_settings kann einen Override (für Test-Mail) enthalten."""
     try:
-        s = get_smtp_settings()
-        if not all([s["server"], s["port"], s["user"], s["password"]]):
+        s = smtp_settings if smtp_settings else get_smtp_settings()
+        if not all([s.get("server"), s.get("port"), s.get("user"), s.get("password")]):
             print("SMTP nicht konfiguriert (weder DB noch Umgebungsvariablen).")
             return False
-
+        smtp_user = s["user"]
         msg = EmailMessage()
-        msg['From'] = formataddr((s["from_name"], s["user"]))
+        msg['From'] = formataddr((s.get("from_name", "Fahrtenbuch System"), smtp_user))
         msg['To'] = to_email
         msg['Subject'] = "Ihr neues Passwort für das Fahrtenbuch"
-        msg['Reply-To'] = s["user"]
-        domain = s["user"].split('@')[1] if '@' in s["user"] else 'localhost'
+        msg['Reply-To'] = smtp_user
+        domain = smtp_user.split('@')[1] if '@' in smtp_user else 'localhost'
         msg['Message-ID'] = make_msgid(domain=domain)
         # Bewusst KEIN X-Priority-Header und KEIN HTML (Spam-Filter!).
-
         msg.set_content(f"""Hallo,
 
 Sie haben ein neues Passwort fuer das Fahrtenbuch-System angefordert.
@@ -55,16 +54,16 @@ Ihr neues Passwort lautet: {new_plain_password}
 Bitte aendern Sie dieses Passwort sofort nach dem ersten Login.
 
 Viele Gruesse
-{s['from_name']}""", subtype='plain', charset='utf-8')
+{s.get('from_name', 'Fahrtenbuch System')}""", subtype='plain', charset='utf-8')
 
         if int(s["port"]) == 465:
             with smtplib.SMTP_SSL(s["server"], int(s["port"]), timeout=15) as server:
-                server.login(s["user"], s["password"])
+                server.login(smtp_user, s["password"])
                 server.send_message(msg)
         else:
             with smtplib.SMTP(s["server"], int(s["port"]), timeout=15) as server:
                 server.ehlo(); server.starttls(); server.ehlo()
-                server.login(s["user"], s["password"])
+                server.login(smtp_user, s["password"])
                 server.send_message(msg)
         return True
     except smtplib.SMTPAuthenticationError:

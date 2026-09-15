@@ -1,12 +1,12 @@
 import hashlib
+import secrets
 
 from config import supabase
 from database import DatabaseError
 
 
 def _hash(password: str) -> str:
-    # HINWEIS: SHA256 ohne Salt nur zur Kompatibilität mit der Bestands-DB.
-    # Bei der nächsten Migration auf bcrypt umstellen!
+    # Kompatibilität mit Bestands-DB (SHA256). Bei nächster Migration: bcrypt!
     return hashlib.sha256(password.encode()).hexdigest()
 
 
@@ -20,13 +20,12 @@ def add_user(username, password, email) -> bool:
         }).execute()
         return True
     except Exception as e:
-        raise DatabaseError(f"Registrierung fehlgeschlagen: {e}") from e
+        raise DatabaseError(f"Registrierung fehlgeschlagen (Benutzername existiert bereits?): {e}") from e
 
 
 def verify_user(username, password):
     try:
-        r = (supabase.table("users")
-             .select("username, password, email, force_pw_change")
+        r = (supabase.table("users").select("username, password, email, force_pw_change")
              .eq("username", username.strip().lower())
              .eq("password", _hash(password)).execute())
         return (True, r.data[0]) if r.data else (False, {})
@@ -34,18 +33,36 @@ def verify_user(username, password):
         raise DatabaseError(f"Login fehlgeschlagen: {e}") from e
 
 
-def find_user(username, email):
+def get_user_email(username) -> str:
+    """Liefert die hinterlegte E-Mail (für Passwort-Reset), sonst ''. """
     try:
         r = (supabase.table("users").select("username, email")
-             .eq("username", username.strip().lower())
-             .eq("email", email.strip().lower()).execute())
-        return r.data[0] if r.data else None
+             .eq("username", username.strip().lower()).execute())
+        if not r.data:
+            return ""
+        return r.data[0].get("email") or ""
     except Exception as e:
         raise DatabaseError(f"Benutzersuche fehlgeschlagen: {e}") from e
 
 
+def all_usernames() -> list:
+    try:
+        r = supabase.table("users").select("username").execute()
+        return [row["username"] for row in (r.data or [])]
+    except Exception as e:
+        raise DatabaseError(f"Benutzerliste fehlgeschlagen: {e}") from e
+
+
+def set_user_email(username, email) -> bool:
+    try:
+        supabase.table("users").update({"email": email.strip().lower()}) \
+            .eq("username", username).execute()
+        return True
+    except Exception as e:
+        raise DatabaseError(f"E-Mail-Update fehlgeschlagen: {e}") from e
+
+
 def update_password(username, new_password, force_change=None) -> bool:
-    """force_change: True/False setzt die Spalte, None lässt sie unverändert."""
     try:
         data = {"password": _hash(new_password)}
         if force_change is not None:
@@ -55,3 +72,12 @@ def update_password(username, new_password, force_change=None) -> bool:
         return True
     except Exception as e:
         raise DatabaseError(f"Passwort-Update fehlgeschlagen: {e}") from e
+
+
+def reset_password_by_username(username, new_plain_password) -> str:
+    """Wie Original: neues Passwort setzen + force_pw_change=True. Gibt E-Mail zurück."""
+    email = get_user_email(username)
+    if not email:
+        raise DatabaseError("Für diesen Account ist keine E-Mail hinterlegt.")
+    update_password(username, new_plain_password, force_change=True)
+    return email
