@@ -65,3 +65,21 @@ def load_year(username, jahr) -> dict:
         if not df.empty:
             result[(jahr, monat)] = df
     return result
+    def load_verfuegbare_jahre(username) -> list:
+    """Alle Jahre, für die Fahrten gespeichert sind (für die Jahres-Auswahl)."""
+    try:
+        r = (supabase.table("fahrten").select("jahr")
+             .eq("username", username).execute())
+        return sorted({int(row["jahr"]) for row in (r.data or [])})
+    except Exception as e:
+        raise DatabaseError(f"Verfügbare Jahre laden fehlgeschlagen: {e}") from e
+
+
+def delete_year(username, jahr) -> bool:
+    """Löscht alle Fahrten eines Jahres aus der DB."""
+    try:
+        supabase.table("fahrten").delete().eq("username", username) \
+            .eq("jahr", int(jahr)).execute()
+        return True
+    except Exception as e:
+        raise DatabaseError(f"Jahr {jahr} löschen fehlgeschlagen: {e}") from e
