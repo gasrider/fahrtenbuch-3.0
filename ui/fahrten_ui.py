@@ -1,5 +1,6 @@
-"""Generator-Tab: Uploads, Eckdaten, Editoren, Generierung, Bearbeitung
-(MIT automatischer Neuberechnung aller Kilometerstände), PDF-Export."""
+"""Generator-Tab: Uploads, Eckdaten, Editoren, Generierung MIT automatischer
+Fahrzeiten-Anpassung + automatischer Plausibilitätsprüfung aller Monate,
+Bearbeitung (mit Kilometer-Neuberechnung), PDF-Export."""
 from datetime import date
 
 import pandas as pd
@@ -11,7 +12,8 @@ from database.fahrzeuge import load_fahrzeuge, save_fahrzeuge, update_start_km
 from database.zeitraeume import load_zeitraeume, save_zeitraeume
 from database.fahrten import save_month, load_year
 from logic.generator import generiere_monate, urlaubs_tage
-from logic.validation import scan_for_red_flags
+from logic.validation import (scan_for_red_flags, korrigiere_geschwindigkeiten_generated,
+                              pruefe_alle_monate)
 from logic.excel_import import (process_fahrzeuge, process_zeitraeume,
                                 lade_keywords, keywords_aus_text)
 from logic.helpers import _safe_int, dauer_string
@@ -44,17 +46,30 @@ def _fzg_namen(fahrzeuge_df):
             if str(b).strip() and str(b).strip().lower() not in ("none", "nan")]
 
 
+def _zeige_plausibilitaet(flags_map, monate_gesamt):
+    """Kompakte Ampel-Anzeige der automatischen Prüfung."""
+    if not flags_map:
+        st.success(f"✅ Automatische Plausibilitätsprüfung: {monate_gesamt} Monat(e) geprüft – "
+                   "keine Auffälligkeiten. Fahrtenbuch ist konsistent.")
+        return
+    total = sum(len(v) for v in flags_map.values())
+    st.warning(f"⚠️ Plausibilitätsprüfung: {total} Auffälligkeit(en) in {len(flags_map)} "
+               f"von {monate_gesamt} Monat(en) – bitte unten im Editor korrigieren "
+               "(Kilometer UND Fahrzeiten im selben Zug anpassen):")
+    for key in sorted(flags_map.keys()):
+        with st.expander(f"📌 {MONATE[key[1] - 1]} {key[0]}: {len(flags_map[key])} Auffälligkeit(en)"):
+            for f in flags_map[key]:
+                st.markdown(f"- {f}")
+
+
 def _jahr_recalc_und_speichern(username, jahr, edited_monat_df, monat_key, fahrzeuge_df):
     """Lädt alle Monate des Jahres, setzt den bearbeiteten Monat ein und rechnet
-    ALLE abfahrt_km chronologisch neu (komplette Kilometerkette), inkl. Jahres-Anfang
-    und -Ende. Speichert alle Monate + Endkilometer zurück."""
+    ALLE abfahrt_km chronologisch neu (inkl. Jahres-Anfang/-Ende)."""
     year_data = load_year(username, jahr)
     edited = edited_monat_df.copy()
     edited["datum"] = pd.to_datetime(edited["datum"]).dt.date.astype(str)
     year_data[monat_key] = edited
 
-    # Jahres-Startstand rekonstruieren: DB-Startstand (= Ende der Generierung)
-    # minus Summe aller KM des Jahres -> echter Anfangsstand.
     km = {}
     for _, fz in fahrzeuge_df.iterrows():
         fz_id = _safe_int(fz.get('id'), default=None)
@@ -69,7 +84,6 @@ def _jahr_recalc_und_speichern(username, jahr, edited_monat_df, monat_key, fahrz
                        + _safe_int(pd.to_numeric(d["km_p"], errors="coerce").fillna(0).sum())
         km[fz_id] = ende - total
 
-    # Chronologisch durch alle Monate: abfahrt_km neu aufbauen
     for key in sorted(year_data.keys()):
         dfm = year_data[key].copy().sort_values("datum").reset_index(drop=True)
         rows = []
@@ -83,7 +97,6 @@ def _jahr_recalc_und_speichern(username, jahr, edited_monat_df, monat_key, fahrz
             rows.append(r)
         year_data[key] = pd.DataFrame(rows)
 
-    # Alle Monate zurückspeichern + Endstand fürs Folgejahr aktualisieren
     for key, dfm in year_data.items():
         save_month(username, key[0], key[1], dfm)
     try:
@@ -268,6 +281,19 @@ def render(username):
             generated, current_km = generiere_monate(
                 jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df, keywords, params)
             progress.empty()
+
+            # --- Automatische Fahrzeiten-Anpassung (Kilometer bleiben unverändert!) ---
+            generated, anz_fix = korrigiere_geschwindigkeiten_generated(generated)
+            if anz_fix:
+                st.info(f"🔧 Automatische Fahrzeiten-Anpassung: Bei {anz_fix} Fahrt(en) war die "
+                        "Durchschnittsgeschwindigkeit durch die KM-Skalierung unrealistisch hoch. "
+                        "Die FAHRZEITEN wurden verlängert (Kilometer unverändert), sodass "
+                        "Kilometer und Dauer zusammenpassen.")
+
+            # --- Automatische Plausibilitätsprüfung über ALLE generierten Monate ---
+            flags_map = pruefe_alle_monate(generated)
+            _zeige_plausibilitaet(flags_map, len(monate_liste))
+
             st.session_state["generated_months_data"] = generated
             st.session_state["aktuelles_jahr"] = jahr
             st.session_state["aktueller_monat"] = monate_liste[-1]
@@ -295,31 +321,26 @@ def render(username):
         except ValueError as e:
             st.error(f"⚠️ {e}")
 
-    # ========== 5) ANZEIGE, BEARBEITUNG (MIT RECALC), PDF ==========
+    # ========== 5) ANZEIGE, BEARBEITUNG, PDF ==========
     df = st.session_state.get("fahrten_df")
     if df is not None:
         jahr_akt = st.session_state["aktuelles_jahr"]
         monat_akt = st.session_state["aktueller_monat"]
-        red_flags = scan_for_red_flags(df)
-        if red_flags:
-            st.error("⚠️ Plausibilitätsprüfung fehlgeschlagen! Bitte korrigiere folgende Fehler "
-                     "im Fahrtenbuch, bevor du das PDF exportierst:")
-            for flag in red_flags:
-                st.warning(flag)
-            st.markdown("---")
 
         st.subheader("✏️ Fahrten anpassen & manuell hinzufügen")
-        st.caption("💡 Beim Speichern werden ALLE Kilometerstände (abfahrt_km) des ganzen "
-                   "Jahres automatisch neu berechnet – die Kette passt immer.")
+        st.caption("💡 Beim Speichern werden ALLE Kilometerstände des Jahres neu berechnet "
+                   "und danach automatisch erneut geprüft.")
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True,
                                    key="edit_fahrten_editor")
         col_save, col_add = st.columns([1, 1])
         with col_save:
-            if st.button("💾 Änderungen speichern (Kilometerstände werden neu berechnet)"):
+            if st.button("💾 Änderungen speichern (Kilometer + Prüfung automatisch)"):
                 try:
-                    with st.spinner("Kilometerstände werden neu berechnet…"):
+                    with st.spinner("Kilometerstände neu berechnen und prüfen…"):
                         year_data = _jahr_recalc_und_speichern(
                             username, jahr_akt, edited_df, (jahr_akt, monat_akt), fahrzeuge_df)
+                    flags_map = pruefe_alle_monate(year_data)
+                    _zeige_plausibilitaet(flags_map, len(year_data))
                     st.session_state["generated_months_data"] = {k: {"data": v} for k, v in year_data.items()}
                     st.session_state["fahrten_df"] = year_data[(jahr_akt, monat_akt)]
                     st.toast("Gespeichert – Kilometerkette neu aufgebaut!", icon="✅")
@@ -353,9 +374,11 @@ def render(username):
                     new_df = pd.concat([edited_df, pd.DataFrame([new_row])], ignore_index=True)
                     new_df = new_df.sort_values(by="datum").reset_index(drop=True)
                     try:
-                        with st.spinner("Kilometerstände werden neu berechnet…"):
+                        with st.spinner("Kilometerstände neu berechnen und prüfen…"):
                             year_data = _jahr_recalc_und_speichern(
                                 username, jahr_akt, new_df, (jahr_akt, monat_akt), fahrzeuge_df)
+                        flags_map = pruefe_alle_monate(year_data)
+                        _zeige_plausibilitaet(flags_map, len(year_data))
                         st.session_state["generated_months_data"] = {k: {"data": v} for k, v in year_data.items()}
                         st.session_state["fahrten_df"] = year_data[(jahr_akt, monat_akt)]
                         st.session_state["show_add_form"] = False
