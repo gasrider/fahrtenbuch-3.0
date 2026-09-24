@@ -65,7 +65,9 @@ def load_year(username, jahr) -> dict:
         if not df.empty:
             result[(jahr, monat)] = df
     return result
-    def load_verfuegbare_jahre(username) -> list:
+
+
+def load_verfuegbare_jahre(username) -> list:
     """Alle Jahre, für die Fahrten gespeichert sind (für die Jahres-Auswahl)."""
     try:
         r = (supabase.table("fahrten").select("jahr")
