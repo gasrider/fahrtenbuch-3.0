@@ -1,6 +1,5 @@
-"""Generator-Tab: Uploads, Eckdaten, Editoren, Generierung MIT automatischer
-Fahrzeiten-Anpassung + automatischer Plausibilitätsprüfung aller Monate,
-Bearbeitung (mit Kilometer-Neuberechnung), PDF-Export."""
+"""Generator-Tab mit Jahres-Ablage: Jahr öffnen lädt gespeicherte Fahrten UND
+die Generierungs-Einstellungen des Jahres; neue Generierung speichert beides."""
 from datetime import date
 
 import pandas as pd
@@ -10,13 +9,14 @@ from database import DatabaseError
 from database.settings import load_settings
 from database.fahrzeuge import load_fahrzeuge, save_fahrzeuge, update_start_km
 from database.zeitraeume import load_zeitraeume, save_zeitraeume
-from database.fahrten import save_month, load_year
+from database.fahrten import save_month, load_year, load_verfuegbare_jahre, delete_year
+from database.generation_settings import load_generation_settings, save_generation_settings
 from logic.generator import generiere_monate, urlaubs_tage
 from logic.validation import (scan_for_red_flags, korrigiere_geschwindigkeiten_generated,
                               pruefe_alle_monate)
 from logic.excel_import import (process_fahrzeuge, process_zeitraeume,
                                 lade_keywords, keywords_aus_text)
-from logic.helpers import _safe_int, dauer_string
+from logic.helpers import _safe_int, dauer_string, to_date
 from pdf.monats_pdf import create_monats_pdf
 from pdf.jahres_pdf import create_jahres_pdf
 from logic.constants import MONATE
@@ -47,15 +47,14 @@ def _fzg_namen(fahrzeuge_df):
 
 
 def _zeige_plausibilitaet(flags_map, monate_gesamt):
-    """Kompakte Ampel-Anzeige der automatischen Prüfung."""
     if not flags_map:
         st.success(f"✅ Automatische Plausibilitätsprüfung: {monate_gesamt} Monat(e) geprüft – "
-                   "keine Auffälligkeiten. Fahrtenbuch ist konsistent.")
+                   "keine Auffälligkeiten.")
         return
     total = sum(len(v) for v in flags_map.values())
     st.warning(f"⚠️ Plausibilitätsprüfung: {total} Auffälligkeit(en) in {len(flags_map)} "
-               f"von {monate_gesamt} Monat(en) – bitte unten im Editor korrigieren "
-               "(Kilometer UND Fahrzeiten im selben Zug anpassen):")
+               f"von {monate_gesamt} Monat(en) – bitte korrigieren (Kilometer UND "
+               "Fahrzeiten im selben Zug anpassen):")
     for key in sorted(flags_map.keys()):
         with st.expander(f"📌 {MONATE[key[1] - 1]} {key[0]}: {len(flags_map[key])} Auffälligkeit(en)"):
             for f in flags_map[key]:
@@ -63,8 +62,8 @@ def _zeige_plausibilitaet(flags_map, monate_gesamt):
 
 
 def _jahr_recalc_und_speichern(username, jahr, edited_monat_df, monat_key, fahrzeuge_df):
-    """Lädt alle Monate des Jahres, setzt den bearbeiteten Monat ein und rechnet
-    ALLE abfahrt_km chronologisch neu (inkl. Jahres-Anfang/-Ende)."""
+    """Alle Monate des Jahres laden, bearbeiteten Monat einsetzen, komplette
+    Kilometerkette chronologisch neu rechnen, alles + Endstand speichern."""
     year_data = load_year(username, jahr)
     edited = edited_monat_df.copy()
     edited["datum"] = pd.to_datetime(edited["datum"]).dt.date.astype(str)
@@ -115,7 +114,48 @@ def render(username):
     except DatabaseError as e:
         st.error(str(e)); return
 
-    # ========== 1) UPLOADS & KEYWORDS ==========
+    # ================= JAHRSAUSWAHL =================
+    try:
+        verfuegbare_jahre = load_verfuegbare_jahre(username)
+    except DatabaseError:
+        verfuegbare_jahre = []
+    heute = date.today().year
+    optionen = sorted(set(verfuegbare_jahre) | {heute, heute + 1, heute + 2})
+    _akt = st.session_state.get("aktuelles_jahr", heute)
+    standard_index = optionen.index(_akt) if _akt in optionen else len(optionen) - 1
+    jahr = int(st.selectbox(
+        "📅 Jahr öffnen – gespeicherte Fahrten & Generierungs-Einstellungen werden automatisch geladen",
+        optionen, index=standard_index, key="jahr_auswahl"))
+
+    try:
+        year_data = load_year(username, jahr)
+    except DatabaseError as e:
+        st.error(str(e)); return
+    try:
+        saved = load_generation_settings(username, jahr)
+    except DatabaseError:
+        saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+
+    if year_data:
+        st.session_state["generated_months_data"] = {k: {"data": v} for k, v in year_data.items()}
+        st.session_state["aktuelles_jahr"] = jahr
+        monate_jahr = [m for (jj, m) in year_data.keys()]
+        if st.session_state.get("aktueller_monat") not in monate_jahr:
+            st.session_state["aktueller_monat"] = max(monate_jahr)
+        st.success(f"📂 Jahr {jahr} geöffnet: {len(year_data)} Monat(e) mit gespeicherten Fahrten"
+                   + (" – Generierungs-Einstellungen wurden wiederhergestellt." if saved else "."))
+    else:
+        if st.session_state.get("aktuelles_jahr") != jahr:
+            st.session_state["generated_months_data"] = {}
+            st.session_state["fahrten_df"] = None
+            st.session_state["aktuelles_jahr"] = jahr
+        st.info(f"Für {jahr} sind noch keine Fahrten gespeichert – unten generieren. "
+                "Die Einstellungen werden beim Generieren automatisch für dieses Jahr abgelegt.")
+
+    # ================= UPLOADS & KEYWORDS =================
+    st.markdown("---")
     st.subheader("📥 Excel-Dateien hochladen (optional)")
     colU1, colU2, colU3 = st.columns(3)
     fzg_xlsx = colU1.file_uploader("Fahrzeugliste.xlsx", type=["xlsx"], key="upl_fzg")
@@ -123,6 +163,7 @@ def render(username):
     kw_xlsx = colU3.file_uploader("Keywords.xlsx (optional)", type=["xlsx"], key="upl_kw")
 
     import_hinweis = []
+    keyword_text = ""
     if fzg_xlsx is not None:
         try:
             fahrzeuge_df = process_fahrzeuge(fzg_xlsx)
@@ -145,72 +186,98 @@ def render(username):
         st.info("✔ Keywords werden aus der hochgeladenen Excel-Datei verwendet.")
     else:
         keyword_text = st.text_area(
-            "Oder Orte und Zwecke hier eintragen (Format: 'Ort:Zweck1,Zweck2, ...')",
-            value=DEFAULT_KEYWORD_TEXT, height=200)
+            "Orte und Zwecke (Format: 'Ort:Zweck1,Zweck2, ...') – pro Jahr gespeichert",
+            value=str(saved.get("keyword_text", DEFAULT_KEYWORD_TEXT) or DEFAULT_KEYWORD_TEXT),
+            height=200, key=f"kw_text_{jahr}")
         keywords = keywords_aus_text(keyword_text)
 
-    # ========== 2) ECKDATEN ==========
+    # ================= ECKDATEN (Defaults aus den Jahres-Einstellungen) =================
     st.markdown("---")
-    st.subheader("⚙️ Eckdaten & Keywords für die Generierung")
+    st.subheader(f"⚙️ Eckdaten für {jahr} (werden pro Jahr gespeichert)")
 
     with st.expander("🏖️ Urlaubswochen (optional)"):
         st.markdown("An diesen Tagen werden keine Dienstfahrten generiert.")
         u1, u2, u3 = st.columns(3)
         with u1:
-            anzahl_wochen = st.slider("Anzahl der Urlaubswochen", 0, 4, 0)
+            anzahl_wochen = st.slider("Anzahl der Urlaubswochen", 0, 4,
+                                      int(saved.get("anzahl_wochen", 0) or 0),
+                                      key=f"anz_wochen_{jahr}")
         with u2:
-            verteilung = st.selectbox("Verteilung", ["1x4 Wochen", "2x2 Wochen", "4x1 Woche"],
-                                      disabled=anzahl_wochen == 0)
+            v_opts = ["1x4 Wochen", "2x2 Wochen", "4x1 Woche"]
+            v_index = v_opts.index(saved["verteilung"]) if saved.get("verteilung") in v_opts else 0
+            verteilung = st.selectbox("Verteilung", v_opts, index=v_index,
+                                      disabled=anzahl_wochen == 0, key=f"verteilung_{jahr}")
         with u3:
-            start_w = st.date_input("Start der 1. Urlaubswoche",
-                                    value=date(date.today().year, 4, 1),
-                                    disabled=anzahl_wochen == 0)
+            start_default = to_date(saved.get("start_woche_1")) or date(jahr, 4, 1)
+            start_w = st.date_input("Start der 1. Urlaubswoche", value=start_default,
+                                    disabled=anzahl_wochen == 0, key=f"start_woche_{jahr}")
         urlaub_fahrzeug, urlaub_km_min, urlaub_km_max = "", 30, 80
         if anzahl_wochen > 0:
-            fzg_namen = _fzg_namen(fahrzeuge_df)
-            if not fzg_namen:
+            fzg_namen_urlaub = _fzg_namen(fahrzeuge_df)
+            if not fzg_namen_urlaub:
                 st.warning("Keine Fahrzeuge vorhanden – zuerst Fahrzeuge anlegen/speichern.")
             st.markdown("**Private Kilometer im Urlaub:**")
             u4, u5, u6 = st.columns(3)
             with u4:
-                urlaub_fahrzeug = st.selectbox("Fahrzeug für private Urlaubs-KM", fzg_namen,
-                                               disabled=not fzg_namen)
+                u_index = fzg_namen_urlaub.index(saved.get("urlaub_fahrzeug_name")) \
+                    if saved.get("urlaub_fahrzeug_name") in fzg_namen_urlaub else 0
+                urlaub_fahrzeug = st.selectbox("Fahrzeug für private Urlaubs-KM",
+                                               fzg_namen_urlaub or [""],
+                                               index=u_index if fzg_namen_urlaub else 0,
+                                               disabled=not fzg_namen_urlaub,
+                                               key=f"urlaub_fzg_{jahr}")
             with u5:
-                urlaub_km_min = st.number_input("Private KM pro Urlaubstag (Min)", 0, 500, 30, 5)
+                urlaub_km_min = st.number_input("Private KM pro Urlaubstag (Min)", 0, 500,
+                                                int(saved.get("urlaub_km_min", 30) or 30), 5,
+                                                key=f"urlaub_min_{jahr}")
             with u6:
-                urlaub_km_max = st.number_input("Private KM pro Urlaubstag (Max)", 0, 500, 80, 5)
+                urlaub_km_max = st.number_input("Private KM pro Urlaubstag (Max)", 0, 500,
+                                                int(saved.get("urlaub_km_max", 80) or 80), 5,
+                                                key=f"urlaub_max_{jahr}")
 
     st.markdown("**Feinabstimmung für Wochenenden/Feiertage:**")
     w1, w2 = st.columns(2)
     with w1:
-        st.slider("Wahrscheinlichkeit für Dienstfahrt am Wochenende/Feiertag (%)", 0, 100, 10)
+        st.slider("Wahrscheinlichkeit für Dienstfahrt am Wochenende/Feiertag (%)", 0, 100, 10,
+                  key=f"pwe_{jahr}")
     with w2:
         st.info("Restliche Fahrten sind Privatfahrten.")
 
     colA, colB, colC, colD = st.columns(4)
     with colA:
-        modus = st.radio("Generierungs-Modus", ["Einzelner Monat", "Ganzes Jahr"])
+        m_opts = ["Einzelner Monat", "Ganzes Jahr"]
+        m_index = 1 if saved.get("modus") == "Ganzes Jahr" else 0
+        modus = st.radio("Generierungs-Modus", m_opts, index=m_index, key=f"modus_{jahr}")
+        _m_saved = int(saved.get("generierungs_monat", 0) or 0)
         monat_name = st.selectbox("Monat für Generierung", MONATE,
-                                  index=date.today().month - 1, disabled=(modus == "Ganzes Jahr"))
+                                  index=(_m_saved - 1) if 1 <= _m_saved <= 12 else date.today().month - 1,
+                                  disabled=(modus == "Ganzes Jahr"), key=f"gen_monat_{jahr}")
         monat = MONATE.index(monat_name) + 1
     with colB:
-        st.slider("Ø Fahrten pro Woche", 1, 10, 4)
+        st.slider("Ø Fahrten pro Woche", 1, 10, 4, key=f"fpw_{jahr}")
     with colC:
-        st.slider("Ø Privat-KM an Feiertagen/Sonntagen", 10, 500, 50)
+        st.slider("Ø Privat-KM an Feiertagen/Sonntagen", 10, 500, 50, key=f"pkm_{jahr}")
     with colD:
-        prob_werktag = st.slider("Wahrscheinlichkeit Dienstfahrt (Werktag %)", 0, 100, 75,
-                                 help="Steuert die Anzahl der Stopps (Fahrtlänge).")
+        prob_werktag = st.slider("Wahrscheinlichkeit Dienstfahrt (Werktag %)", 0, 100,
+                                 int(saved.get("prob_werktag", 75) or 75),
+                                 help="Steuert die Anzahl der Stopps (Fahrtlänge).",
+                                 key=f"pw_{jahr}")
     colKM1, colKM2 = st.columns(2)
     with colKM1:
-        target_km_min = st.number_input("Ø Dienst-KM pro Monat (Minimum)", 0, 5000, 1650, 50)
+        target_km_min = st.number_input("Ø Dienst-KM pro Monat (Minimum)", 0, 5000,
+                                        int(saved.get("target_km_min", 1650) or 1650), 50,
+                                        key=f"tmin_{jahr}")
     with colKM2:
-        target_km_max = st.number_input("Ø Dienst-KM pro Monat (Maximum)", 0, 5000, 2000, 50)
+        target_km_max = st.number_input("Ø Dienst-KM pro Monat (Maximum)", 0, 5000,
+                                        int(saved.get("target_km_max", 2000) or 2000), 50,
+                                        key=f"tmax_{jahr}")
 
     st.markdown("**Feinabstimmung für Feiertage/Urlaub:**")
     f1, f2 = st.columns(2)
     with f1:
         prob_feiertag_urlaub = st.slider(
-            "Wahrscheinlichkeit für Dienstfahrt an Feiertagen/Urlaubstagen (%)", 0, 100, 5)
+            "Wahrscheinlichkeit für Dienstfahrt an Feiertagen/Urlaubstagen (%)", 0, 100,
+            int(saved.get("prob_feiertag_urlaub", 5) or 5), key=f"pf_{jahr}")
     with f2:
         st.info("Restliche Fahrten sind Privatfahrten.")
 
@@ -219,12 +286,17 @@ def render(username):
     fzg_namen_liste = _fzg_namen(fahrzeuge_df)
     hcol1, hcol2 = st.columns(2)
     with hcol1:
-        hauptfahrzeug_name = st.selectbox("Hauptfahrzeug",
-                                          ["(keines - gleichmäßig)"] + fzg_namen_liste)
+        h_opts = ["(keines - gleichmäßig)"] + fzg_namen_liste
+        h_index = h_opts.index(saved.get("hauptfahrzeug_name")) \
+            if saved.get("hauptfahrzeug_name") in h_opts else 0
+        hauptfahrzeug_name = st.selectbox("Hauptfahrzeug", h_opts, index=h_index,
+                                          key=f"haupt_{jahr}")
     with hcol2:
-        hauptfahrzeug_anteil = st.slider("Anteil Hauptfahrzeug (%)", 0, 100, 70)
+        hauptfahrzeug_anteil = st.slider("Anteil Hauptfahrzeug (%)", 0, 100,
+                                         int(saved.get("hauptfahrzeug_anteil", 70) or 70),
+                                         key=f"haupt_a_{jahr}")
 
-    # ========== 3) EDITOREN + SPEICHERN ==========
+    # ================= EDITOREN =================
     st.markdown("---")
     st.subheader("✏️ Fahrzeuge & Zeiträume (editierbar)")
     colE1, colE2 = st.columns(2)
@@ -243,33 +315,39 @@ def render(username):
         except DatabaseError as e:
             st.error(str(e))
 
-    # ========== 4) GENERATOR ==========
+    # ================= GENERATOR =================
     st.markdown("---")
-    jahr = int(st.number_input("Jahr", min_value=2000, max_value=2100,
-                               value=date.today().year, step=1))
     keywords_ok = keywords is not None and not keywords.empty
     ready = (not fahrzeuge_df.empty and not zeitraeume_df.empty and keywords_ok)
     if not ready:
         st.warning("Für die Generierung werden Fahrzeuge + Zeiträume + Keywords benötigt.")
-    colG1, colG2 = st.columns([1, 1])
-    gen_text = f"🚀 Fahrten für {'Ganzes Jahr' if modus == 'Ganzes Jahr' else monat_name} {jahr} generieren"
-    gen_btn = colG1.button(gen_text, type="primary", disabled=not ready)
-    clear_btn = colG2.button("🗑️ Alle generierten Daten löschen")
-
-    if clear_btn:
-        st.session_state["fahrten_df"] = None
-        st.session_state["generated_months_data"] = {}
-        st.rerun()
+    gen_btn = st.button(f"🚀 Fahrten für {'Ganzes Jahr' if modus == 'Ganzes Jahr' else monat_name} {jahr} generieren",
+                        type="primary", disabled=not ready)
 
     if gen_btn:
         vacation_days = urlaubs_tage(jahr, anzahl_wochen,
                                      verteilung if anzahl_wochen > 0 else "1x4 Wochen",
                                      start_w if anzahl_wochen > 0 else date(jahr, 4, 1))
+        # Einstellungen für dieses JAHR speichern (Jahres-Ablage)
+        try:
+            save_generation_settings(username, jahr, {
+                "modus": modus, "generierungs_monat": monat,
+                "anzahl_wochen": int(anzahl_wochen), "verteilung": verteilung,
+                "start_woche_1": start_w.isoformat() if start_w else None,
+                "urlaub_fahrzeug_name": urlaub_fahrzeug,
+                "urlaub_km_min": int(urlaub_km_min), "urlaub_km_max": int(urlaub_km_max),
+                "prob_werktag": int(prob_werktag), "prob_feiertag_urlaub": int(prob_feiertag_urlaub),
+                "target_km_min": int(target_km_min), "target_km_max": int(target_km_max),
+                "hauptfahrzeug_name": "" if hauptfahrzeug_name.startswith("(keines") else hauptfahrzeug_name,
+                "hauptfahrzeug_anteil": int(hauptfahrzeug_anteil),
+                "keyword_text": keyword_text,
+            })
+        except DatabaseError as e:
+            st.warning(f"Einstellungen konnten nicht für das Jahr gespeichert werden: {e}")
+
         params = {
-            "prob_werktag": prob_werktag,
-            "prob_feiertag_urlaub": prob_feiertag_urlaub,
-            "vacation_days": vacation_days,
-            "urlaub_fahrzeug_name": urlaub_fahrzeug,
+            "prob_werktag": prob_werktag, "prob_feiertag_urlaub": prob_feiertag_urlaub,
+            "vacation_days": vacation_days, "urlaub_fahrzeug_name": urlaub_fahrzeug,
             "urlaub_km_min": urlaub_km_min, "urlaub_km_max": urlaub_km_max,
             "target_km_min": target_km_min, "target_km_max": target_km_max,
             "hauptfahrzeug_name": "" if hauptfahrzeug_name.startswith("(keines") else hauptfahrzeug_name,
@@ -281,19 +359,10 @@ def render(username):
             generated, current_km = generiere_monate(
                 jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df, keywords, params)
             progress.empty()
-
-            # --- Automatische Fahrzeiten-Anpassung (Kilometer bleiben unverändert!) ---
             generated, anz_fix = korrigiere_geschwindigkeiten_generated(generated)
-            if anz_fix:
-                st.info(f"🔧 Automatische Fahrzeiten-Anpassung: Bei {anz_fix} Fahrt(en) war die "
-                        "Durchschnittsgeschwindigkeit durch die KM-Skalierung unrealistisch hoch. "
-                        "Die FAHRZEITEN wurden verlängert (Kilometer unverändert), sodass "
-                        "Kilometer und Dauer zusammenpassen.")
-
-            # --- Automatische Plausibilitätsprüfung über ALLE generierten Monate ---
             flags_map = pruefe_alle_monate(generated)
-            _zeige_plausibilitaet(flags_map, len(monate_liste))
-
+            st.session_state["pruef_ergebnis"] = {"jahr": jahr, "flags": flags_map,
+                                                  "monate": len(monate_liste)}
             st.session_state["generated_months_data"] = generated
             st.session_state["aktuelles_jahr"] = jahr
             st.session_state["aktueller_monat"] = monate_liste[-1]
@@ -317,21 +386,59 @@ def render(username):
                 st.toast("Fahrten in der Cloud gespeichert!")
             except DatabaseError as e:
                 st.error(str(e))
-            st.success(f"Fahrten für {len(monate_liste)} Monat(e) generiert.")
+            st.success(f"Fahrten für {len(monate_liste)} Monat(e) generiert und unter {jahr} abgelegt.")
+            opts = sorted({m for (jj, m) in generated.keys()})
+            if monate_liste[-1] in opts:
+                st.session_state[f"monat_view_{jahr}"] = monate_liste[-1]
         except ValueError as e:
             st.error(f"⚠️ {e}")
 
-    # ========== 5) ANZEIGE, BEARBEITUNG, PDF ==========
-    df = st.session_state.get("fahrten_df")
-    if df is not None:
-        jahr_akt = st.session_state["aktuelles_jahr"]
-        monat_akt = st.session_state["aktueller_monat"]
+    # ---- Löschen ----
+    with st.expander("🗑️ Ansicht zurücksetzen / Jahr löschen"):
+        if st.button("🔄 Ansicht zurücksetzen (Daten bleiben in der Cloud)"):
+            st.session_state["fahrten_df"] = None
+            st.session_state["generated_months_data"] = {}
+            st.session_state.pop("pruef_ergebnis", None)
+            st.rerun()
+        st.markdown("**Gefährlich:**")
+        confirm = st.checkbox(f"Ja, alle gespeicherten Fahrten des Jahres {jahr} "
+                              "endgültig aus der Cloud löschen")
+        if confirm and st.button(f"🗑️ Jahr {jahr} endgültig löschen", type="primary"):
+            try:
+                delete_year(username, jahr)
+                st.session_state["generated_months_data"] = {}
+                st.session_state["fahrten_df"] = None
+                st.session_state.pop("pruef_ergebnis", None)
+                st.session_state["jahr_auswahl"] = heute
+                st.toast(f"Jahr {jahr} gelöscht.")
+                st.rerun()
+            except DatabaseError as e:
+                st.error(str(e))
+
+    # ================= ANZEIGE / BEARBEITUNG / PDF =================
+    gen_data = st.session_state.get("generated_months_data") or {}
+    monate_mit_daten = sorted({m for (jj, m) in gen_data.keys() if jj == jahr})
+    if monate_mit_daten:
+        st.markdown("---")
+        st.subheader(f"📁 Fahrten {jahr}")
+        monat_view = st.selectbox("Monat anzeigen/bearbeiten", monate_mit_daten,
+                                  format_func=lambda m: MONATE[m - 1],
+                                  key=f"monat_view_{jahr}")
+        st.session_state["aktueller_monat"] = monat_view
+        entry = gen_data[(jahr, monat_view)]
+        df = entry["data"] if isinstance(entry, dict) and "data" in entry else entry
+        st.session_state["fahrten_df"] = df
+        jahr_akt, monat_akt = jahr, monat_view
+
+        pf = st.session_state.get("pruef_ergebnis")
+        if pf and pf.get("jahr") == jahr:
+            _zeige_plausibilitaet(pf.get("flags", {}), pf.get("monate", 0))
 
         st.subheader("✏️ Fahrten anpassen & manuell hinzufügen")
         st.caption("💡 Beim Speichern werden ALLE Kilometerstände des Jahres neu berechnet "
                    "und danach automatisch erneut geprüft.")
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True,
-                                   key="edit_fahrten_editor")
+                                   key=f"edit_fahrten_{jahr}_{monat_view}")
         col_save, col_add = st.columns([1, 1])
         with col_save:
             if st.button("💾 Änderungen speichern (Kilometer + Prüfung automatisch)"):
@@ -340,7 +447,8 @@ def render(username):
                         year_data = _jahr_recalc_und_speichern(
                             username, jahr_akt, edited_df, (jahr_akt, monat_akt), fahrzeuge_df)
                     flags_map = pruefe_alle_monate(year_data)
-                    _zeige_plausibilitaet(flags_map, len(year_data))
+                    st.session_state["pruef_ergebnis"] = {"jahr": jahr_akt, "flags": flags_map,
+                                                          "monate": len(year_data)}
                     st.session_state["generated_months_data"] = {k: {"data": v} for k, v in year_data.items()}
                     st.session_state["fahrten_df"] = year_data[(jahr_akt, monat_akt)]
                     st.toast("Gespeichert – Kilometerkette neu aufgebaut!", icon="✅")
@@ -369,8 +477,7 @@ def render(username):
                     fz_id = _safe_int(fz_row['id'].values[0]) if not fz_row.empty else 1
                     new_row = {"datum": new_date, "fahrzeug_id": int(fz_id), "fahrzeug": new_fzg,
                                "route": new_route, "km_d": int(new_km_d), "km_p": int(new_km_p),
-                               "abf": new_abf, "ank": new_ank, "dauer": dauer_str,
-                               "abfahrt_km": 0}
+                               "abf": new_abf, "ank": new_ank, "dauer": dauer_str, "abfahrt_km": 0}
                     new_df = pd.concat([edited_df, pd.DataFrame([new_row])], ignore_index=True)
                     new_df = new_df.sort_values(by="datum").reset_index(drop=True)
                     try:
@@ -378,7 +485,8 @@ def render(username):
                             year_data = _jahr_recalc_und_speichern(
                                 username, jahr_akt, new_df, (jahr_akt, monat_akt), fahrzeuge_df)
                         flags_map = pruefe_alle_monate(year_data)
-                        _zeige_plausibilitaet(flags_map, len(year_data))
+                        st.session_state["pruef_ergebnis"] = {"jahr": jahr_akt, "flags": flags_map,
+                                                              "monate": len(year_data)}
                         st.session_state["generated_months_data"] = {k: {"data": v} for k, v in year_data.items()}
                         st.session_state["fahrten_df"] = year_data[(jahr_akt, monat_akt)]
                         st.session_state["show_add_form"] = False
@@ -390,19 +498,19 @@ def render(username):
         st.subheader("📄 PDF-Export")
         colP1, colP2 = st.columns(2)
         with colP1:
-            if st.button(f"📄 Monats-PDF ({MONATE[monat_akt - 1]} {jahr_akt}) erstellen"):
-                buf = create_monats_pdf(st.session_state["fahrten_df"], monat_akt, jahr_akt,
+            if st.button(f"📄 Monats-PDF ({MONATE[monat_view - 1]} {jahr}) erstellen"):
+                buf = create_monats_pdf(st.session_state["fahrten_df"], monat_view, jahr,
                                         user_info, fahrzeuge_df)
-                st.download_button(f"⬇️ Download PDF {MONATE[monat_akt - 1]} {jahr_akt}",
-                                   data=buf, file_name=f"Fahrtenbuch_{jahr_akt}_{monat_akt:02d}.pdf",
+                st.download_button(f"⬇️ Download PDF {MONATE[monat_view - 1]} {jahr}",
+                                   data=buf, file_name=f"Fahrtenbuch_{jahr}_{monat_view:02d}.pdf",
                                    mime="application/pdf")
         with colP2:
-            if st.button("📊 Jahresbericht-PDF erstellen"):
-                if not st.session_state["generated_months_data"]:
+            if st.button(f"📊 Jahresbericht-PDF {jahr} erstellen"):
+                jahresdaten = {k: v for k, v in gen_data.items() if k[0] == jahr}
+                if not jahresdaten:
                     st.warning("Noch keine Monatsdaten für den Jahresbericht vorhanden.")
                 else:
-                    buf = create_jahres_pdf(st.session_state["generated_months_data"], jahr_akt,
-                                            user_info, fahrzeuge_df)
-                    st.download_button(f"⬇️ Download Jahresbericht {jahr_akt}", data=buf,
-                                       file_name=f"Fahrtenbuch_Jahresuebersicht_{jahr_akt}.pdf",
+                    buf = create_jahres_pdf(jahresdaten, jahr, user_info, fahrzeuge_df)
+                    st.download_button(f"⬇️ Download Jahresbericht {jahr}", data=buf,
+                                       file_name=f"Fahrtenbuch_Jahresuebersicht_{jahr}.pdf",
                                        mime="application/pdf")
