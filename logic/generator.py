@@ -1,5 +1,10 @@
 """Der original Fahrten-Generator: Urlaubswochen, Wahrscheinlichkeiten,
-2-wöchentliche Sonderfahrt, dienstlich_quote, KM-Skalierung, Endkilometer."""
+2-wöchentliche Sonderfahrt, dienstlich_quote, KM-Skalierung, Endkilometer.
+
+GEÄNDERT gegenüber Original: An Werktagen bleibt kein Tag mehr leer.
+Fällt die Werktag-Wahrscheinlichkeit negativ aus, wird trotzdem eine
+normale Dienstfahrt erzeugt. Der Slider steuert die Anzahl der Stopps
+(und damit die Fahrtlänge)."""
 from datetime import date, datetime, timedelta
 import calendar
 
@@ -41,13 +46,7 @@ def urlaubs_tage(jahr, anzahl_wochen, verteilung, start_woche_1: date) -> set:
 
 def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                      keywords_df, params):
-    """Liefert ({monat_key: {"data": df, "end_km": int}}, current_km_dict).
-    params-Schlüssel (alle wie Original-Defaults):
-      prob_werktag=75, prob_feiertag_urlaub=5,
-      vacation_days=set(), urlaub_fahrzeug_name='', urlaub_km_min=30, urlaub_km_max=80,
-      target_km_min=1650, target_km_max=2000,
-      hauptfahrzeug_name='', hauptfahrzeug_anteil=70
-    """
+    """Liefert ({monat_key: {"data": df, "end_km": int}}, current_km_dict)."""
     rng = np.random.default_rng()
     hol = austria_holidays(jahr)
     wohnort = str(user_info.get('wohnort', 'Oberhofen am Irrsee'))
@@ -72,7 +71,6 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
         row.get('dienstlich_quote'), 90)))
         for _, row in fahrzeuge_df.iterrows() if pd.notna(row.get('id'))}
 
-    # Zeiträume als reine Python-Liste (wie Original, vermeidet Typ-Probleme)
     _liste = []
     if zeitraeume_df is not None and not zeitraeume_df.empty:
         for _, z in zeitraeume_df.iterrows():
@@ -89,7 +87,6 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                          "Bitte Zeiträume (von/bis) aktualisieren, sonst werden keine "
                          "Fahrzeuge zugewiesen.")
 
-    # Werktag-Anzahl pro Monat (für KM-Skalierung)
     month_workday_counts, avg_workdays = {}, 0
     for mk in monate_liste:
         tage = pd.date_range(date(jahr, mk, 1), date(jahr, mk, calendar.monthrange(jahr, mk)[1]), freq="D")
@@ -122,7 +119,6 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
             tag_str = t.strftime("%Y-%m-%d")
             gueltig = [fid for v, b, fid in _liste if v <= tag_str <= b]
             if gueltig:
-                # Hauptfahrzeug-Gewichtung
                 if haupt_id is not None and int(haupt_id) in gueltig and len(gueltig) > 1:
                     rest = (1.0 - haupt_anteil) / (len(gueltig) - 1)
                     weights = [haupt_anteil if int(fid) == int(haupt_id) else rest for fid in gueltig]
@@ -178,7 +174,7 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                     ank_dt = abf_dt + timedelta(minutes=fahrzeit)
                     abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(fahrzeit)
             elif is_saturday:
-                if rng.random() < 0.4:  # wie Original (hartcodiert 40 %)
+                if rng.random() < 0.4:
                     km_d = int(rng.integers(25, 55)); km_p = 0
                     num_stops = int(rng.integers(1, 2))
                     sel = kw.sample(min(num_stops, len(kw)))
@@ -199,7 +195,7 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                 ank_dt = abf_dt + timedelta(minutes=fahrzeit)
                 abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(fahrzeit)
             else:
-                # WERKTAG: dienstlich_quote des Fahrzeugs
+                # WERKTAG: dienstlich_quote des Fahrzeugs entscheidet Dienst vs. Privat
                 fz_quote = dienstlich_quotes.get(fahrzeug_id, 90) / 100.0
                 is_dienstlich = rng.random() < fz_quote
                 if not is_dienstlich:
@@ -216,7 +212,6 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                     current_week = t.isocalendar()[1]
                     target_day = 0 if current_week % 2 == 1 else 1
                     if t.weekday() == target_day and not special_trip_done_this_week:
-                        # 2-wöchentliche Sonderfahrt mit Büro + Stopps
                         special_trip_done_this_week = True
                         km_p = _safe_int(user_info.get('entfernung'), 25)
                         parts = [wohnort_clean, f"{dienstort_clean} (Büro)"]
@@ -235,7 +230,9 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                         abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(minutes=start_minute)
                         ank_dt = abf_dt + timedelta(minutes=int(dauer_min))
                         abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(dauer_min)
-                    elif rng.random() < (prob_werktag / 100.0):
+                    else:
+                        # GEÄNDERT: immer eine Dienstfahrt – kein Werktag bleibt leer.
+                        # Der Slider steuert die Anzahl der Stopps (Fahrtlänge).
                         if prob_werktag >= 90: num_stops = int(rng.integers(1, 3))
                         elif prob_werktag >= 70: num_stops = int(rng.integers(1, 4))
                         elif prob_werktag >= 50: num_stops = int(rng.integers(2, 4))
