@@ -1,0 +1,32 @@
+name: Supabase Keep-Alive
+
+on:
+  schedule:
+    # Montag, Mittwoch, Freitag um 07:00 UTC
+    - cron: '0 7 * * 1,3,5'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Supabase anpingen (3 Versuche)
+        run: |
+          OK=0
+          for i in 1 2 3; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+              "https://slwcirzmjuchdqzwckky.supabase.co/rest/v1/users?select=username&limit=1")
+            echo "Versuch $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then OK=1; break; fi
+            sleep 10
+          done
+          if [ "$OK" != "1" ]; then
+            echo "::error::Supabase nicht erreichbar - Projekt evtl. pausiert!"
+            exit 1
+          fi
+
+      - name: App warm halten
+        run: |
+          curl -s -o /dev/null -w "App-Status: %{http_code}\n" \
+            "https://fahrtenbuch-30-ean6qnkogye5t6fabkfwj.streamlit.app/" || true
