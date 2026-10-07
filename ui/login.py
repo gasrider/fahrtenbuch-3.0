@@ -1,11 +1,20 @@
-"""Login, Registrierung, Passwort vergessen (nur Benutzername), erzwungener Passwortwechsel."""
-import streamlit as st
+"""Login, Registrierung (mit Einladungs-Code), Passwort vergessen, Passwortwechsel."""
 import secrets
+
+import streamlit as st
 
 from database import DatabaseError
 from database.users import (add_user, verify_user, update_password,
                             reset_password_by_username)
 from services.email import send_reset_email
+
+
+def _invite_code() -> str:
+    """Holt den Einladungs-Code aus den Secrets. Leer = Registrierung gesperrt."""
+    try:
+        return str(st.secrets.get("INVITE_CODE", "") or "").strip()
+    except Exception:
+        return ""
 
 
 def render_login():
@@ -26,7 +35,8 @@ def render_login():
                     st.error("Passwort muss mindestens 4 Zeichen haben.")
                 else:
                     try:
-                        update_password(st.session_state["temp_username"], p1, force_change=False)
+                        update_password(st.session_state["temp_username"], p1,
+                                        force_change=False)
                         st.session_state.logged_in = True
                         st.session_state.username = st.session_state["temp_username"]
                         st.session_state.force_pw_change_flow = False
@@ -61,12 +71,22 @@ def render_login():
                     st.error("Falsche Zugangsdaten")
 
     with tab2:
+        code_cfg = _invite_code()
+        if not code_cfg:
+            st.warning("🔒 Registrierung ist derzeit GESPERRT: Es ist kein Einladungs-Code "
+                       "konfiguriert. Bitte den Administrator, in den App-Einstellungen "
+                       "(Secrets) einen INVITE_CODE zu hinterlegen.")
         nu = st.text_input("Neuer Benutzername", key="reg_user")
         ne = st.text_input("Ihre E-Mail-Adresse", key="reg_email")
         np1 = st.text_input("Neues Passwort", type="password", key="reg_pw")
-        if st.button("Account erstellen"):
+        einladung = st.text_input("Einladungs-Code", type="password",
+                                  help="Diesen Code hat dir dein Team-Admin gegeben. "
+                                       "Er ist nötig, um einen Account zu erstellen.")
+        if st.button("Account erstellen", disabled=not code_cfg):
             if not ne or "@" not in ne:
                 st.error("Bitte geben Sie eine gültige E-Mail-Adresse an.")
+            elif einladung.strip() != code_cfg:
+                st.error("Der Einladungs-Code ist falsch. Bitte beim Admin nachfragen.")
             else:
                 try:
                     add_user(nu, np1, ne)
@@ -86,9 +106,10 @@ def render_login():
                     new_pw = secrets.token_urlsafe(8)
                     email = reset_password_by_username(ru, new_pw)
                     if send_reset_email(email, new_pw):
-                        st.success("Ein neues Passwort wurde an Ihre E-Mail-Adresse gesendet! "
-                                   "Bitte prüfen Sie auch Ihren Spam-Ordner.")
+                        st.success("Ein neues Passwort wurde an Ihre E-Mail-Adresse "
+                                   "gesendet! Bitte prüfen Sie auch Ihren Spam-Ordner.")
                     else:
-                        st.error("Fehler beim Senden der E-Mail. Bitte kontaktieren Sie den Admin.")
+                        st.error("Fehler beim Senden der E-Mail. "
+                                 "Bitte kontaktieren Sie den Admin.")
                 except DatabaseError as e:
                     st.error(str(e))
