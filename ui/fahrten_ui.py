@@ -77,6 +77,10 @@ def _zeige_plausibilitaet(flags_map, monate_gesamt):
 
 
 def _jahr_recalc_und_speichern(username, jahr, edited_monat_df, monat_key, fahrzeuge_df):
+    """Kilometerkette eines Jahres neu berechnen.
+    Semantik: start_km_vorjahr = Tachostand am 1.1. des Jahres (Jahres-ANFANG).
+    Die Kette startet direkt bei diesem Wert; am Ende wird der Jahres-Endstand
+    als Startwert fuer das Folgejahr gespeichert."""
     year_data = load_year(username, jahr)
     edited = edited_monat_df.copy()
     edited["datum"] = pd.to_datetime(edited["datum"]).dt.date.astype(str)
@@ -87,15 +91,7 @@ def _jahr_recalc_und_speichern(username, jahr, edited_monat_df, monat_key, fahrz
         fz_id = _safe_int(fz.get('id'), default=None)
         if fz_id is None:
             continue
-        ende = _safe_int(fz.get('start_km_vorjahr'))
-        total = 0
-        for (j, m), dfm in year_data.items():
-            d = dfm[dfm["fahrzeug_id"] == fz_id]
-            if not d.empty:
-                km_d_sum = pd.to_numeric(d["km_d"], errors="coerce").fillna(0).sum()
-                km_p_sum = pd.to_numeric(d["km_p"], errors="coerce").fillna(0).sum()
-                total += _safe_int(km_d_sum) + _safe_int(km_p_sum)
-        km[fz_id] = ende - total
+        km[fz_id] = _safe_int(fz.get('start_km_vorjahr'))
 
     for key in sorted(year_data.keys()):
         dfm = year_data[key].copy().sort_values("datum").reset_index(drop=True)
@@ -107,6 +103,8 @@ def _jahr_recalc_und_speichern(username, jahr, edited_monat_df, monat_key, fahrz
                 fz = int(fz)
                 r["abfahrt_km"] = km.get(fz, 0)
                 km[fz] = km.get(fz, 0) + _safe_int(r.get("km_d")) + _safe_int(r.get("km_p"))
+            else:
+                r["abfahrt_km"] = 0
             rows.append(r)
         year_data[key] = pd.DataFrame(rows)
 
