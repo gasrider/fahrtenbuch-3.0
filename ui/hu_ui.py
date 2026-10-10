@@ -14,7 +14,7 @@ from logic.hu_korrektur import wende_hu_korrekturen_an
 
 def render(username):
     st.subheader("HU-Korrekturen")
-    st.caption("Zeilen koennen geaendert, ueber das Kaeutchen links geloescht oder neu "
+    st.caption("Zeilen koennen geaendert, ueber das Kaestchen links geloescht oder neu "
                "angelegt werden. Stopps: Orte mit Komma getrennt eintragen.")
     try:
         fahrzeuge = load_fahrzeuge(username)
@@ -74,7 +74,7 @@ def render(username):
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("💾 HU-Einträge speichern", type="primary"):
+        if st.button("HU-Eintraege speichern", type="primary"):
             daten, fehler = [], []
             for i, (_, z) in enumerate(edited.iterrows(), start=2):
                 name = str(z.get("Fahrzeug") or "").strip()
@@ -114,10 +114,10 @@ def render(username):
 
     st.markdown("---")
     st.subheader("Fahrten an HU anpassen")
-    st.warning("⚠️ Nur EINMAL pro HU ausfuehren! Die Kilometer aller Fahrten vor dem "
-               "HU-Datum werden auf den HU-Stand skaliert (inkl. Fahrzeiten) und eine "
-               "Werkstatt-Fahrt angelegt. Wiederholen veraendert die km erneut!")
-    if st.button("🔧 Fahrten anpassen (Kilometer neu berechnen)"):
+    st.warning("Nur EINMAL pro HU ausfuehren! Kilometer vor dem HU-Datum werden auf "
+               "den HU-Stand skaliert, danach kompensierend (Jahressumme bleibt "
+               "erhalten) und eine Werkstatt-Fahrt angelegt.")
+    if st.button("Fahrten anpassen (Kilometer neu berechnen)"):
         if edited.empty:
             st.warning("Keine HU-Eintraege vorhanden.")
             return
@@ -148,7 +148,7 @@ def render(username):
                         "generieren.")
                 return
             settings = load_settings(username)
-                       with st.spinner("Wende HU-Korrekturen an..."):
+            with st.spinner("Wende HU-Korrekturen an..."):
                 gen, km_ende, meldungen = wende_hu_korrekturen_an(
                     gen, fahrzeuge, daten, pd.DataFrame(columns=["Ort", "Zweck"]),
                     settings.get("wohnort", ""))
