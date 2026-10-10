@@ -13,10 +13,17 @@ def _clean(value) -> str:
 
 
 def save_fahrzeuge(username, df) -> pd.DataFrame:
-    """Speichert Fahrzeuge OHNE die IDs zu veraendern."""
+    """Speichert Fahrzeuge ID-stabil. Zeilen OHNE ID werden ueber die
+    BEZEICHNUNG bestehenden Fahrzeugen zugeordnet (Excel-Import!),
+    nur wirklich neue Namen werden angelegt."""
     try:
-        alt = supabase.table("fahrzeuge").select("id").eq("username", username).execute()
+        alt = (supabase.table("fahrzeuge").select("id, bezeichnung")
+               .eq("username", username).execute())
         alte_ids = {int(r["id"]) for r in (alt.data or []) if r.get("id") is not None}
+        name_zu_id = {}
+        for r in (alt.data or []):
+            if r.get("bezeichnung"):
+                name_zu_id[str(r["bezeichnung"]).strip().lower()] = int(r["id"])
 
         behalten = set()
         updates, inserts = [], []
@@ -34,13 +41,15 @@ def save_fahrzeuge(username, df) -> pd.DataFrame:
                     "privat_km_max": _safe_int(row.get("privat_km_max")),
                     "dienstlich_quote": _safe_int(row.get("dienstlich_quote"), 90),
                 }
-                fid_raw = row.get("id")
                 fid = None
+                fid_raw = row.get("id")
                 if fid_raw is not None and pd.notna(fid_raw):
                     try:
                         fid = int(fid_raw)
                     except (ValueError, TypeError):
                         fid = None
+                if fid is None:
+                    fid = name_zu_id.get(bez.strip().lower())
                 if fid is not None and fid in alte_ids:
                     updates.append({**clean, "id": fid})
                     behalten.add(fid)
@@ -68,15 +77,14 @@ def save_fahrzeuge(username, df) -> pd.DataFrame:
                                 for r in inserts]
                     supabase.table("fahrzeuge").insert(fallback).execute()
                     raise DatabaseError(
-                        "Gespeichert, ABER: Spalte 'dienstlich_quote' fehlt in der "
-                        "DB (INTEGER, Default 90) - bitte anlegen.") from e
+                        "Gespeichert, ABER: Spalte 'dienstlich_quote' fehlt in der DB "
+                        "(INTEGER, Default 90) - bitte anlegen.") from e
                 raise
         return load_fahrzeuge(username)
     except DatabaseError:
         raise
     except Exception as e:
         raise DatabaseError(f"Fahrzeuge speichern fehlgeschlagen: {e}") from e
-
 
 def load_fahrzeuge(username) -> pd.DataFrame:
     try:
