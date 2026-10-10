@@ -53,11 +53,15 @@ def process_fahrzeuge(file) -> pd.DataFrame:
 
 
 def process_zeitraeume(file, fahrzeuge_df) -> pd.DataFrame:
+    """Zeitraeume importieren. Zuordnung der Fahrzeuge bevorzugt ueber
+    Kennzeichen/Bezeichnung. Enthaelt die Excel nur alte IDs, bleibt die
+    Zuordnung offen (fahrzeug_id = NA) und muss im Editor manuell gewaehlt
+    werden - das verhindert, dass tote IDs gespeichert werden."""
     raw = pd.read_excel(file)
     raw = drop_empty_rows(raw)
     df = normalize_df_cols(raw)
     df = coalesce(df, ["fahrzeug_id", "id", "kfz_id"], "fahrzeug_id")
-    df = coalesce(df, ["kennzeichen", "kennz", "kennzeichen"], "kennzeichen")
+    df = coalesce(df, ["kennzeichen", "kennz"], "kennzeichen")
     df = coalesce(df, ["bezeichnung", "fahrzeug", "name", "modell"], "bezeichnung")
     df = coalesce(df, ["von", "beginn", "start", "from"], "von")
     df = coalesce(df, ["bis", "ende", "end", "to"], "bis")
@@ -76,13 +80,10 @@ def process_zeitraeume(file, fahrzeuge_df) -> pd.DataFrame:
         fk2 = fahrzeuge_df.set_index(
             fahrzeuge_df["bezeichnung"].astype(str).str.strip().str.upper())["id"]
         mapped = mapped.fillna(m2.map(fk2).astype("Int64"))
-    if "fahrzeug_id" in df.columns:
-        id_coerced = pd.to_numeric(df["fahrzeug_id"], errors="coerce").astype("Int64")
-        mapped = mapped.fillna(id_coerced)
-    df["fahrzeug_id"] = mapped
 
+    df["fahrzeug_id"] = mapped
     keep = [c for c in ["fahrzeug_id", "von", "bis"] if c in df.columns]
-    df = df[keep].dropna(subset=["fahrzeug_id", "von", "bis"]).reset_index(drop=True)
+    df = df[keep].dropna(subset=["von", "bis"]).reset_index(drop=True)
     return df
 
 
