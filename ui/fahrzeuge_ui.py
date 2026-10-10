@@ -41,7 +41,7 @@ def render(username):
     up_zeit = c2.file_uploader("Fahrzeug-Zeitraeume.xlsx", type=["xlsx"], key="up_zeit2")
     up_orte = c3.file_uploader("Orte.xlsx / Orte.csv", type=["xlsx", "csv"], key="up_orte2")
 
-        if up_fzg is not None and (up_fzg.name, up_fzg.size) != st.session_state.get("up_fzg2_id"):
+    if up_fzg is not None and (up_fzg.name, up_fzg.size) != st.session_state.get("up_fzg2_id"):
         st.session_state["up_fzg2_id"] = (up_fzg.name, up_fzg.size)
         try:
             importiert = process_fahrzeuge(up_fzg)
