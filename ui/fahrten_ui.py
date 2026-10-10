@@ -78,21 +78,14 @@ def _zeige_plausibilitaet(flags_map, monate_gesamt):
 
 
 def _jahr_recalc_und_speichern(username, jahr, edited_monat_df, monat_key, fahrzeuge_df):
-    """Kilometerkette eines Jahres neu berechnen.
-    Semantik: start_km_vorjahr = Tachostand am 1.1. des Jahres (Jahres-ANFANG).
-    Die Kette startet direkt bei diesem Wert; am Ende wird der Jahres-Endstand
-    als Startwert fuer das Folgejahr gespeichert."""
+    """Kilometerkette neu berechnen - startet IMMER am gesperrten Jahres-Anker."""
     year_data = load_year(username, jahr)
     edited = edited_monat_df.copy()
     edited["datum"] = pd.to_datetime(edited["datum"]).dt.date.astype(str)
     year_data[monat_key] = edited
 
-    km = {}
-    for _, fz in fahrzeuge_df.iterrows():
-        fz_id = _safe_int(fz.get('id'), default=None)
-        if fz_id is None:
-            continue
-        km[fz_id] = _safe_int(fz.get('start_km_vorjahr'))
+    anchor = get_or_create_anchor(username, jahr, fahrzeuge_df)
+    km = dict(anchor)
 
     for key in sorted(year_data.keys()):
         dfm = year_data[key].copy().sort_values("datum").reset_index(drop=True)
@@ -112,7 +105,7 @@ def _jahr_recalc_und_speichern(username, jahr, edited_monat_df, monat_key, fahrz
     for key, dfm in year_data.items():
         save_month(username, key[0], key[1], dfm)
     try:
-        update_start_km(username, km)
+        set_start_km(username, jahr + 1, km)
     except DatabaseError:
         pass
     return year_data
