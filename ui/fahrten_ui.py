@@ -180,8 +180,20 @@ def render(username):
     keyword_text = ""
     if fzg_xlsx is not None:
         try:
-            fahrzeuge_df = process_fahrzeuge(fzg_xlsx)
-            import_hinweis.append(f"Fahrzeuge aus Excel geladen ({len(fahrzeuge_df)} Zeilen) - noch NICHT gespeichert!")
+            importiert = process_fahrzeuge(fzg_xlsx)
+            # IDs aus der DB per Bezeichnung zuordnen (Excel-IDs werden ignoriert)
+            name_zu_id = {}
+            if not fahrzeuge.empty:
+                for _, r in fahrzeuge.iterrows():
+                    if pd.notna(r.get("id")) and r.get("bezeichnung"):
+                        name_zu_id[str(r["bezeichnung"]).strip().lower()] = int(r["id"])
+            importiert["id"] = importiert["bezeichnung"].map(
+                lambda b: name_zu_id.get(str(b).strip().lower())
+                if pd.notna(b) else None).astype("Int64")
+            fahrzeuge_df = importiert
+            import_hinweis.append(
+                f"Fahrzeuge aus Excel geladen ({len(importiert)} Zeilen) - IDs wurden "
+                "per Bezeichnung zugeordnet. Neue Namen bekommen beim Speichern eine ID!")
         except Exception as e:
             st.error(f"Fahrzeugliste-Import: {e}")
     if zeit_xlsx is not None and not fahrzeuge_df.empty:
