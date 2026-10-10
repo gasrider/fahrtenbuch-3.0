@@ -4,11 +4,12 @@ import streamlit as st
 
 from database import DatabaseError
 from database.fahrzeuge import load_fahrzeuge
-from database.jahres_start_km import get_or_create_anchor, set_start_km
 from database.orte import load_orte
 from database.hu_corrections import load_hu_raw, save_hu_corrections
 from database.fahrten import load_year, save_month
 from database.settings import load_settings
+from database.jahres_start_km import get_or_create_anchor
+from database.jahres_start_km import set_start_km
 from logic.helpers import _safe_int, _parse_date_iso
 from logic.hu_korrektur import wende_hu_korrekturen_an
 
@@ -149,13 +150,13 @@ def render(username):
                         "generieren.")
                 return
             settings = load_settings(username)
-                        with st.spinner("Wende HU-Korrekturen an..."):
-                fzg_hu = fahrzeuge
-                if len(jahre) == 1:
-                    anchor = get_or_create_anchor(username, jahre[0], fahrzeuge)
-                    fzg_hu = fahrzeuge.copy()
-                    fzg_hu["start_km_vorjahr"] = fzg_hu["id"].map(
-                        lambda x: anchor.get(int(x)) if pd.notna(x) else None)
+            fzg_hu = fahrzeuge
+            if len(jahre) == 1:
+                anchor = get_or_create_anchor(username, jahre[0], fahrzeuge)
+                fzg_hu = fahrzeuge.copy()
+                fzg_hu["start_km_vorjahr"] = fzg_hu["id"].map(
+                    lambda x: anchor.get(int(x)) if pd.notna(x) else None)
+            with st.spinner("Wende HU-Korrekturen an..."):
                 gen, km_ende, meldungen = wende_hu_korrekturen_an(
                     gen, fzg_hu, daten, pd.DataFrame(columns=["Ort", "Zweck"]),
                     settings.get("wohnort", ""))
@@ -165,6 +166,6 @@ def render(username):
                     save_month(username, j, m, d["data"])
                 for j in jahre:
                     set_start_km(username, j + 1, km_ende)
-            st.success("Fahrten angepasst. Jahres-Endkilometer als Startwert gespeichert!")
+            st.success("Fahrten angepasst. Folgejahres-Startwerte gespeichert!")
         except DatabaseError as e:
             st.error(str(e))
