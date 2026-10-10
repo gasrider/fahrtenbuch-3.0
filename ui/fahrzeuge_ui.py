@@ -41,10 +41,19 @@ def render(username):
     up_zeit = c2.file_uploader("Fahrzeug-Zeitraeume.xlsx", type=["xlsx"], key="up_zeit2")
     up_orte = c3.file_uploader("Orte.xlsx / Orte.csv", type=["xlsx", "csv"], key="up_orte2")
 
-    if up_fzg is not None and (up_fzg.name, up_fzg.size) != st.session_state.get("up_fzg2_id"):
+        if up_fzg is not None and (up_fzg.name, up_fzg.size) != st.session_state.get("up_fzg2_id"):
         st.session_state["up_fzg2_id"] = (up_fzg.name, up_fzg.size)
         try:
-            st.session_state["fzg_import"] = process_fahrzeuge(up_fzg)
+            importiert = process_fahrzeuge(up_fzg)
+            name_zu_id = {}
+            if not fahrzeuge.empty:
+                for _, r in fahrzeuge.iterrows():
+                    if pd.notna(r.get("id")) and r.get("bezeichnung"):
+                        name_zu_id[str(r["bezeichnung"]).strip().lower()] = int(r["id"])
+            importiert["id"] = importiert["bezeichnung"].map(
+                lambda b: name_zu_id.get(str(b).strip().lower())
+                if pd.notna(b) else None).astype("Int64")
+            st.session_state["fzg_import"] = importiert
         except Exception as e:
             st.error(f"Fahrzeuge-Import: {e}")
 
