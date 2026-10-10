@@ -1,139 +1,161 @@
-"""HU-Korrekturen wie Original: Werkstattort-Dropdown, Stopps-Freitext (Komma-getrennt),
-Kilometerstände + Dauer + Ankunft werden neu berechnet, HU-Fahrt mit Werkstatt-Route."""
-import streamlit as st
+"""HU-Verwaltung: Eintraege bearbeiten/loeschen + optionale Fahrten-Anpassung."""
 import pandas as pd
+import streamlit as st
 
 from database import DatabaseError
 from database.fahrzeuge import load_fahrzeuge
 from database.orte import load_orte
 from database.hu_corrections import load_hu_raw, save_hu_corrections
-from database.fahrten import load_year
+from database.fahrten import load_year, save_month
+from database.settings import load_settings
 from logic.helpers import _safe_int, _parse_date_iso
 from logic.hu_korrektur import wende_hu_korrekturen_an
 
-SPALTEN = ["Fahrzeug", "Datum der HU", "Kilometerstand bei HU",
-           "Werkstattort (Dropdown)", "Kundenstopps vor HU (mehrere möglich)",
-           "Kundenstopps nach HU (mehrere möglich)"]
-
 
 def render(username):
-    st.subheader("🔧 Kilometerstand anpassen (Hauptuntersuchung)")
-    st.info("Hier kannst du für jedes Fahrzeug den Kilometerstand an einem bestimmten Datum "
-            "(z. B. von einer Hauptuntersuchung) anpassen. Die Fahrten werden vor und nach "
-            "diesem Datum neu berechnet und eine Fahrt zur Werkstatt erstellt.")
+    st.subheader("HU-Korrekturen")
+    st.caption("Zeilen koennen geaendert, ueber das Kaeutchen links geloescht oder neu "
+               "angelegt werden. Stopps: Orte mit Komma getrennt eintragen.")
     try:
         fahrzeuge = load_fahrzeuge(username)
         orte = load_orte(username)
         raw = load_hu_raw(username)
     except DatabaseError as e:
-        st.error(str(e)); return
-
-    fahrzeug_optionen = {str(r['bezeichnung']).strip(): _safe_int(r['id'])
-                         for _, r in fahrzeuge.iterrows()
-                         if pd.notna(r.get('id')) and str(r.get('bezeichnung', '')).strip()
-                         and str(r['bezeichnung']).strip().lower() not in ('none', 'nan')}
-    if not fahrzeug_optionen:
-        st.warning("Zuerst Fahrzeuge anlegen.")
+        st.error(str(e))
         return
 
-    werkstatt_orte = sorted(orte) if orte else []
-    verfuegbar_str = ", ".join(werkstatt_orte[:20]) + (" …" if len(werkstatt_orte) > 20 else "")
+    optionen = {}
+    for _, r in fahrzeuge.iterrows():
+        if pd.notna(r.get("id")):
+            name = str(r.get("bezeichnung", "")).strip()
+            if name and name.lower() not in ("none", "nan"):
+                optionen[name] = _safe_int(r["id"])
+    id_zu_name = {v: k for k, v in optionen.items()}
+    if not optionen:
+        st.warning("Zuerst Fahrzeuge anlegen.")
+        return
 
     rows = []
     for r in raw:
         fid = r.get("fahrzeug_id")
-        name = next((n for n, i in fahrzeug_optionen.items() if i == int(fid)), "") if fid is not None else ""
-        rows.append({"Fahrzeug": name, "Datum der HU": r.get("datum") or None,
-                     "Kilometerstand bei HU": _safe_int(r.get("km_at_hu")),
-                     "Werkstattort (Dropdown)": r.get("werkstattort", "") or "",
-                     "Kundenstopps vor HU (mehrere möglich)": r.get("stopps_vor_hu", "") or "",
-                     "Kundenstopps nach HU (mehrere möglich)": r.get("stopps_nach_hu", "") or ""})
-    basis = pd.DataFrame(rows, columns=SPALTEN)
+        rows.append({
+            "Fahrzeug": id_zu_name.get(_safe_int(fid, default=-1), ""),
+            "Datum der HU": r.get("datum") or None,
+            "Kilometerstand bei HU": _safe_int(r.get("km_at_hu")),
+            "Werkstattort": str(r.get("werkstattort", "") or ""),
+            "Stopps vor HU": str(r.get("stopps_vor_hu", "") or ""),
+            "Stopps nach HU": str(r.get("stopps_nach_hu", "") or ""),
+        })
+    basis = pd.DataFrame(rows, columns=["Fahrzeug", "Datum der HU",
+                                        "Kilometerstand bei HU", "Werkstattort",
+                                        "Stopps vor HU", "Stopps nach HU"])
     if not basis.empty:
-        basis["Datum der HU"] = pd.to_datetime(basis["Datum der HU"], errors="coerce").dt.date
+        basis["Datum der HU"] = pd.to_datetime(basis["Datum der HU"],
+                                               errors="coerce").dt.date
 
+    werkstatt_orte = sorted(orte) if orte else []
     edited = st.data_editor(
         basis, num_rows="dynamic", use_container_width=True, key="hu_editor",
         column_config={
-            "Fahrzeug": st.column_config.SelectboxColumn("Fahrzeug", options=list(fahrzeug_optionen.keys()), required=True),
-            "Datum der HU": st.column_config.DateColumn("Datum der HU", format="DD.MM.YYYY", required=True),
-            "Kilometerstand bei HU": st.column_config.NumberColumn("Kilometerstand bei HU (km)", min_value=0, step=1, required=True),
-            "Werkstattort (Dropdown)": st.column_config.SelectboxColumn(
-                "Werkstattort", options=werkstatt_orte, required=True,
-                help="Orte werden im Tab 'Fahrzeuge & Orte' gepflegt/importiert."),
-            "Kundenstopps vor HU (mehrere möglich)": st.column_config.TextColumn(
+            "Fahrzeug": st.column_config.SelectboxColumn(
+                "Fahrzeug", options=sorted(optionen.keys()), required=True),
+            "Datum der HU": st.column_config.DateColumn(
+                "Datum der HU", format="DD.MM.YYYY", required=True),
+            "Kilometerstand bei HU": st.column_config.NumberColumn(
+                "Kilometerstand bei HU", min_value=0, step=1, required=True),
+            "Werkstattort": st.column_config.SelectboxColumn(
+                "Werkstattort", options=werkstatt_orte),
+            "Stopps vor HU": st.column_config.TextColumn(
                 "Stopps vor HU", max_chars=300,
-                help=f"Orte EINTIPPEN (Komma-getrennt). Zweck wird automatisch zugewiesen. Verfügbare Orte: {verfuegbar_str}"),
-            "Kundenstopps nach HU (mehrere möglich)": st.column_config.TextColumn(
-                "Stopps nach HU", max_chars=300,
-                help=f"Orte EINTIPPEN (Komma-getrennt). Zweck wird automatisch zugewiesen. Verfügbare Orte: {verfuegbar_str}"),
+                help="Orte mit Komma getrennt, z. B.: Straßwalchen,Neumarkt,Henndorf"),
+            "Stopps nach HU": st.column_config.TextColumn(
+                "Stopps nach HU", max_chars=300),
         })
 
-    if st.button("🔧 Kilometerstände korrigieren"):
-        if edited.empty:
-            st.warning("Bitte gib mindestens eine Korrektur ein.")
-            return
-        correction_data, fehler = [], []
-        for i, (_, row) in enumerate(edited.iterrows(), start=2):
-            name = str(row.get("Fahrzeug") or "").strip()
-            if name not in fahrzeug_optionen:
-                if not name:
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("💾 HU-Einträge speichern", type="primary"):
+            daten, fehler = [], []
+            for i, (_, z) in enumerate(edited.iterrows(), start=2):
+                name = str(z.get("Fahrzeug") or "").strip()
+                if not name or name.lower() in ("none", "nan"):
                     continue
-                fehler.append(f"Zeile {i}: Fahrzeug '{name}' unbekannt")
-                continue
-            if pd.isna(row.get("Werkstattort (Dropdown)")) or not str(row.get("Werkstattort (Dropdown)")).strip():
-                fehler.append(f"Zeile {i}: Werkstattort fehlt")
-                continue
-            datum = _parse_date_iso(row.get("Datum der HU"))
-            if not datum:
-                fehler.append(f"Zeile {i}: ungültiges Datum")
-                continue
-            nach = [s.strip() for s in str(row.get("Kundenstopps nach HU (mehrere möglich)") or "").split(",") if s.strip()]
-            vor = [s.strip() for s in str(row.get("Kundenstopps vor HU (mehrere möglich)") or "").split(",") if s.strip()]
-            correction_data.append({"fahrzeug_id": fahrzeug_optionen[name], "datum": datum,
-                                    "km_at_hu": _safe_int(row.get("Kilometerstand bei HU")),
-                                    "werkstattort": str(row["Werkstattort (Dropdown)"]).strip(),
-                                    "stopps_nach_hu": nach, "stopps_vor_hu": vor})
-        if fehler:
-            st.error("Nicht gespeichert: " + " | ".join(fehler))
+                if name not in optionen:
+                    fehler.append(f"Zeile {i}: Fahrzeug unbekannt")
+                    continue
+                datum = _parse_date_iso(z.get("Datum der HU"))
+                if not datum:
+                    fehler.append(f"Zeile {i}: Datum fehlt/ungueltig")
+                    continue
+                werk = str(z.get("Werkstattort") or "").strip()
+                if not werk:
+                    fehler.append(f"Zeile {i}: Werkstattort fehlt")
+                    continue
+                daten.append({
+                    "fahrzeug_id": optionen[name],
+                    "datum": datum,
+                    "km_at_hu": _safe_int(z.get("Kilometerstand bei HU")),
+                    "werkstattort": werk,
+                    "stopps_vor_hu": str(z.get("Stopps vor HU") or "").strip(),
+                    "stopps_nach_hu": str(z.get("Stopps nach HU") or "").strip(),
+                })
+            if fehler:
+                st.error(" | ".join(fehler))
+            else:
+                try:
+                    save_hu_corrections(username, daten)
+                    st.success(f"{len(daten)} HU-Eintraege gespeichert.")
+                    st.rerun()
+                except DatabaseError as e:
+                    st.error(str(e))
+    with col2:
+        st.caption("Nur Speichern aendert KEINE Fahrten. Erst wenn die Eintraege "
+                   "stimmen, unten die Fahrten-Anpassung starten.")
+
+    st.markdown("---")
+    st.subheader("Fahrten an HU anpassen")
+    st.warning("⚠️ Nur EINMAL pro HU ausfuehren! Die Kilometer aller Fahrten vor dem "
+               "HU-Datum werden auf den HU-Stand skaliert (inkl. Fahrzeiten) und eine "
+               "Werkstatt-Fahrt angelegt. Wiederholen veraendert die km erneut!")
+    if st.button("🔧 Fahrten anpassen (Kilometer neu berechnen)"):
+        if edited.empty:
+            st.warning("Keine HU-Eintraege vorhanden.")
             return
-        if not correction_data:
-            st.error("Ungültige Eingabe. Bitte stelle sicher, dass alle Pflichtfelder ausgefüllt sind.")
+        daten = []
+        for _, z in edited.iterrows():
+            name = str(z.get("Fahrzeug") or "").strip()
+            datum = _parse_date_iso(z.get("Datum der HU"))
+            werk = str(z.get("Werkstattort") or "").strip()
+            if name not in optionen or not datum or not werk:
+                continue
+            vor = [s.strip() for s in str(z.get("Stopps vor HU") or "").split(",") if s.strip()]
+            nach = [s.strip() for s in str(z.get("Stopps nach HU") or "").split(",") if s.strip()]
+            daten.append({"fahrzeug_id": optionen[name], "datum": datum,
+                          "km_at_hu": _safe_int(z.get("Kilometerstand bei HU")),
+                          "werkstattort": werk,
+                          "stopps_vor_hu": vor, "stopps_nach_hu": nach})
+        if not daten:
+            st.error("Keine gueltigen Eintraege (Fahrzeug, Datum, Werkstattort pruefen).")
             return
-        # generierte Daten laden (aus DB, damit HU auf gespeicherten Fahrten arbeitet)
-        gen = {}
         try:
-            from database.fahrten import load_year
-            from datetime import date as _d
-            jahre = sorted({int(c["datum"][:4]) for c in correction_data})
+            jahre = sorted({int(d["datum"][:4]) for d in daten})
+            gen = {}
             for j in jahre:
-                for (jj, mm), df in load_year(username, j).items():
-                    gen[(jj, mm)] = {"data": df}
+                for (jj, mm), dfm in load_year(username, j).items():
+                    gen[(jj, mm)] = {"data": dfm}
+            if not gen:
+                st.info("Keine gespeicherten Fahrten gefunden - zuerst im Generator "
+                        "generieren.")
+                return
+            settings = load_settings(username)
+            with st.spinner("Wende HU-Korrekturen an..."):
+                gen, meldungen = wende_hu_korrekturen_an(
+                    gen, fahrzeuge, daten, pd.DataFrame(columns=["Ort", "Zweck"]),
+                    settings.get("wohnort", ""))
+                for m in meldungen:
+                    st.write(m)
+                for (j, m), d in gen.items():
+                    save_month(username, j, m, d["data"])
+            st.success("Fahrten wurden an die HU angepasst und gespeichert!")
         except DatabaseError as e:
-            st.error(str(e)); return
-        if not gen:
-            st.info("Es sind noch keine generierten Fahrten gespeichert – zuerst im "
-                    "Generator-Tab das Jahr generieren.")
-            return
-        settings_like = {"wohnort": ""}
-        try:
-            from database.settings import load_settings
-            settings_like = load_settings(username)
-        except DatabaseError:
-            pass
-        with st.spinner("Wende Korrekturen an…"):
-            gen, meldungen = wende_hu_korrekturen_an(
-                gen, fahrzeuge, correction_data,
-                pd.DataFrame(columns=["Ort", "Zweck"]),
-                settings_like.get("wohnort", ""))
-            for m in meldungen:
-                st.write(m)
-            try:
-                from database.fahrten import save_month
-                for (j, m), data in gen.items():
-                    save_month(username, j, m, data["data"])
-                save_hu_corrections(username, correction_data)
-                st.success("Kilometerstände und HU-Fahrten wurden erfolgreich korrigiert!")
-                st.toast("Korrekturen in Cloud gespeichert!")
-            except DatabaseError as e:
-                st.error(str(e))
+            st.error(str(e))
