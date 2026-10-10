@@ -1,10 +1,5 @@
-"""Der original Fahrten-Generator: Urlaubswochen, Wahrscheinlichkeiten,
-2-wöchentliche Sonderfahrt, dienstlich_quote, KM-Skalierung, Endkilometer.
-
-GEÄNDERT gegenüber Original: An Werktagen bleibt kein Tag mehr leer.
-Fällt die Werktag-Wahrscheinlichkeit negativ aus, wird trotzdem eine
-normale Dienstfahrt erzeugt. Der Slider steuert die Anzahl der Stopps
-(und damit die Fahrtlänge)."""
+"""Fahrten-Generator. Zeitmodell v2: Dienstreisen starten um 08:00 und enden
+zwischen 17:00 und 22:00 (Ganztagestour, Stopps verteilt auf den Tag)."""
 from datetime import date, datetime, timedelta
 import calendar
 
@@ -20,11 +15,24 @@ def _time_str(dt):
 
 
 def _dauer_str(mins):
-    return f"{mins // 60:02d}:{mins % 60:02d}"
+    return f"{max(int(mins), 0) // 60:02d}:{int(mins) % 60:02d}"
+
+
+def _tour_zeiten(rng, t, ganztags=True):
+    """Abfahrt 08:00 (+0-10 Min), Ankunft 17:00-22:00 (Ganztag) bzw.
+    13:00-17:00 (Halbtag). Liefert (abf, ank, dauer_min)."""
+    abf_min = 8 * 60 + int(rng.integers(0, 11))
+    if ganztags:
+        ank_min = int(rng.integers(17 * 60, 22 * 60 + 1))
+    else:
+        ank_min = int(rng.integers(13 * 60, 17 * 60 + 1))
+    dauer = ank_min - abf_min
+    abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(minutes=abf_min)
+    ank_dt = abf_dt + timedelta(minutes=dauer)
+    return _time_str(abf_dt), _time_str(ank_dt), dauer
 
 
 def urlaubs_tage(jahr, anzahl_wochen, verteilung, start_woche_1: date) -> set:
-    """Exakt wie Original: 1x4 / 2x2 / 4x1 Wochen."""
     vacation = set()
     if anzahl_wochen <= 0:
         return vacation
@@ -46,7 +54,6 @@ def urlaubs_tage(jahr, anzahl_wochen, verteilung, start_woche_1: date) -> set:
 
 def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                      keywords_df, params):
-    """Liefert ({monat_key: {"data": df, "end_km": int}}, current_km_dict)."""
     rng = np.random.default_rng()
     hol = austria_holidays(jahr)
     wohnort = str(user_info.get('wohnort', 'Oberhofen am Irrsee'))
@@ -56,18 +63,23 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
 
     fahrzeug_optionen = {}
     for _, row in fahrzeuge_df.iterrows():
+        if pd.isna(row.get('id')):
+            continue
         bez = row.get('bezeichnung')
         if bez is not None and pd.notna(bez):
             b = str(bez).strip()
             if b and b.lower() not in ('none', 'nan', ''):
-                fahrzeug_optionen[b] = _safe_int(row['id'])
+                fahrzeug_optionen[b] = int(row['id'])
+    if not fahrzeug_optionen:
+        raise ValueError("Keine Fahrzeuge mit gueltiger ID! Fahrzeuge erst speichern "
+                         "(Button 'Fahrzeuge & Zeitraeume speichern') und dann generieren.")
 
-    current_km = {row['id']: _safe_int(row.get('start_km_vorjahr'))
+    current_km = {int(row['id']): _safe_int(row.get('start_km_vorjahr'))
                   for _, row in fahrzeuge_df.iterrows() if pd.notna(row.get('id'))}
-    privat_km_ranges = {_safe_int(row['id']): (
+    privat_km_ranges = {int(row['id']): (
         _safe_int(row.get('privat_km_min'), 5), _safe_int(row.get('privat_km_max'), 20))
         for _, row in fahrzeuge_df.iterrows() if pd.notna(row.get('id'))}
-    dienstlich_quotes = {_safe_int(row['id']): max(0, min(100, _safe_int(
+    dienstlich_quotes = {int(row['id']): max(0, min(100, _safe_int(
         row.get('dienstlich_quote'), 90)))
         for _, row in fahrzeuge_df.iterrows() if pd.notna(row.get('id'))}
 
@@ -79,13 +91,12 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
             except (KeyError, TypeError, ValueError):
                 continue
             if v and b and v not in ('none', 'nan') and b not in ('none', 'nan') and fid is not None:
-                _liste.append((v, b, fid))
+                _liste.append((v, b, int(fid)))
 
     deckt = any(int(v[:4]) <= jahr <= int(b[:4]) for v, b, _ in _liste)
     if not deckt:
         raise ValueError(f"Kein Zeitraum deckt das Jahr {jahr} ab! "
-                         "Bitte Zeiträume (von/bis) aktualisieren, sonst werden keine "
-                         "Fahrzeuge zugewiesen.")
+                         "Bitte Zeitraeume (von/bis) aktualisieren.")
 
     month_workday_counts, avg_workdays = {}, 0
     for mk in monate_liste:
@@ -144,13 +155,7 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                     stops = [f"{r['Ort']} ({r['Zweck']})" for _, r in sel.iterrows()]
                     km_d = int(rng.integers(15, 25)) + sum(int(rng.integers(10, 25)) for _ in range(num_stops))
                     route = ("Feiertag: " if is_holiday else "Urlaub: ") + " - ".join([wohnort_clean] + stops + [wohnort_clean])
-                    fahrzeit = int(km_d / 80 * 60)
-                    pause = int(rng.integers(20, 60))
-                    dauer_min = fahrzeit + pause
-                    start_minute = int(np.clip(rng.normal(480, 20, 1)[0], 420, 540))
-                    abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(minutes=start_minute)
-                    ank_dt = abf_dt + timedelta(minutes=int(dauer_min))
-                    abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(dauer_min)
+                    abf, ank, dauer = _tour_zeiten(rng, t, ganztags=False)
                 else:
                     if is_vacation:
                         if urlaub_fahrzeug_id is not None and urlaub_fahrzeug_id in gueltig:
@@ -162,7 +167,7 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                             route = "Urlaub"
                         else:
                             km_p = int(rng.integers(5, 21))
-                            route = "Urlaub (Urlaubs-FZ nicht verfügbar)"
+                            route = "Urlaub (Urlaubs-FZ nicht verfuegbar)"
                     else:
                         km_p = int(rng.integers(*privat_km_ranges.get(fahrzeug_id, (5, 21)))) \
                             if fahrzeug_id in privat_km_ranges else int(rng.integers(5, 21))
@@ -180,11 +185,7 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                     sel = kw.sample(min(num_stops, len(kw)))
                     stops = [f"{r['Ort']} ({r['Zweck']})" for _, r in sel.iterrows()]
                     route = " - ".join([wohnort_clean] + stops + [wohnort_clean])
-                    fahrzeit = int(km_d / 80 * 60)
-                    dauer_min = fahrzeit + int(rng.integers(15, 30))
-                    abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(hours=9)
-                    ank_dt = abf_dt + timedelta(minutes=int(dauer_min))
-                    abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(dauer_min)
+                    abf, ank, dauer = _tour_zeiten(rng, t, ganztags=False)
             elif is_sunday:
                 km_p = int(rng.integers(*privat_km_ranges.get(fahrzeug_id, (5, 21)))) \
                     if fahrzeug_id in privat_km_ranges else int(rng.integers(5, 21))
@@ -195,7 +196,6 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                 ank_dt = abf_dt + timedelta(minutes=fahrzeit)
                 abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(fahrzeit)
             else:
-                # WERKTAG: dienstlich_quote des Fahrzeugs entscheidet Dienst vs. Privat
                 fz_quote = dienstlich_quotes.get(fahrzeug_id, 90) / 100.0
                 is_dienstlich = rng.random() < fz_quote
                 if not is_dienstlich:
@@ -203,11 +203,12 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                     km_p = int(rng.integers(*privat_km_ranges.get(fahrzeug_id, (5, 21)))) \
                         if fahrzeug_id in privat_km_ranges else int(rng.integers(5, 21))
                     route = f"{wohnort_clean} - {dienstort_clean} (Arbeitsweg)" if rng.random() < 0.4 else "Privatfahrt"
-                    fahrzeit = max(int(km_p / 70 * 60) + int(rng.integers(5, 15)), 15)
-                    start_minute = int(np.clip(rng.normal(480, 10, 1)[0], 450, 540))
-                    abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(minutes=start_minute)
-                    ank_dt = abf_dt + timedelta(minutes=fahrzeit)
-                    abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(fahrzeit)
+                    abf_min = 8 * 60 + int(rng.integers(0, 11))
+                    ank_min = int(rng.integers(16 * 60, 19 * 60 + 1))
+                    dauer_min = ank_min - abf_min
+                    abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(minutes=abf_min)
+                    ank_dt = abf_dt + timedelta(minutes=dauer_min)
+                    abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(dauer_min)
                 else:
                     current_week = t.isocalendar()[1]
                     target_day = 0 if current_week % 2 == 1 else 1
@@ -222,17 +223,8 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                         parts.append(wohnort_clean)
                         route = " - ".join(parts)
                         km_d = int(km_p) + sum(int(rng.integers(15, 35)) for _ in range(num_stops))
-                        fahrzeit = int((km_d + km_p) / 75 * 60)
-                        termin = int(num_stops * int(rng.integers(25, 45)))
-                        pause = int(rng.integers(15, 30)) if num_stops >= 3 else (int(rng.integers(5, 15)) if num_stops >= 2 else 0)
-                        dauer_min = max(min(fahrzeit + termin + pause, 840), 180)
-                        start_minute = int(np.clip(rng.normal(480, 5, 1)[0], 470, 490))
-                        abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(minutes=start_minute)
-                        ank_dt = abf_dt + timedelta(minutes=int(dauer_min))
-                        abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(dauer_min)
+                        abf, ank, dauer = _tour_zeiten(rng, t, ganztags=True)
                     else:
-                        # GEÄNDERT: immer eine Dienstfahrt – kein Werktag bleibt leer.
-                        # Der Slider steuert die Anzahl der Stopps (Fahrtlänge).
                         if prob_werktag >= 90: num_stops = int(rng.integers(1, 3))
                         elif prob_werktag >= 70: num_stops = int(rng.integers(1, 4))
                         elif prob_werktag >= 50: num_stops = int(rng.integers(2, 4))
@@ -241,14 +233,7 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                         stops = [f"{r['Ort']} ({r['Zweck']})" for _, r in sel.iterrows()]
                         route = " - ".join([wohnort_clean] + stops + [wohnort_clean])
                         km_d = sum(int(rng.integers(15, 35)) for _ in range(num_stops)); km_p = 0
-                        fahrzeit = int((km_d + km_p) / 75 * 60)
-                        termin = int(num_stops * int(rng.integers(25, 45)))
-                        pause = int(rng.integers(15, 30)) if num_stops >= 3 else (int(rng.integers(5, 15)) if num_stops >= 2 else 0)
-                        dauer_min = max(min(fahrzeit + termin + pause, 840), 150)
-                        start_minute = int(np.clip(rng.normal(480, 5, 1)[0], 470, 490))
-                        abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(minutes=start_minute)
-                        ank_dt = abf_dt + timedelta(minutes=int(dauer_min))
-                        abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(dauer_min)
+                        abf, ank, dauer = _tour_zeiten(rng, t, ganztags=True)
 
             abfahrt_km = current_km.get(fahrzeug_id, 0) if fahrzeug_id is not None else 0
             out.append({"datum": t.date(), "fahrzeug_id": fahrzeug_id, "fahrzeug": fahrzeug_name,
@@ -259,7 +244,6 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
 
         df = pd.DataFrame(out).sort_values(["datum"]).reset_index(drop=True)
 
-        # KM-Skalierung auf Monatsziel (wie Original)
         target_min = params.get('target_km_min', 1650)
         target_max = params.get('target_km_max', 2000)
         if not df.empty and target_max > 0:
@@ -271,16 +255,15 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                 mt = np.clip(base * wf * zf, target_min * 0.55, target_max * 1.25)
                 sf = mt / cur
                 df["km_d"] = df.apply(lambda r: int(r["km_d"] * sf) if r["km_d"] > 0 else 0, axis=1)
-                msk = {fz: km - df[df["fahrzeug_id"] == fz][["km_d", "km_p"]].sum().sum()
-                       for fz, km in current_km.items()}
+                msk = {fz: km for fz, km in current_km.items()}
                 rows = []
-                for _, row in df.iterrows():
+                for _, row in df.sort_values("datum").iterrows():
                     fz = row["fahrzeug_id"]
-                    if fz is not None:
-                        r = row.to_dict(); r["abfahrt_km"] = msk.get(fz, 0)
-                        rows.append(r); msk[fz] += row["km_d"] + row["km_p"]
-                    else:
-                        rows.append(row.to_dict())
+                    r = row.to_dict()
+                    if fz is not None and fz in msk:
+                        r["abfahrt_km"] = msk[fz]
+                        msk[fz] += _safe_int(r["km_d"]) + _safe_int(r["km_p"])
+                    rows.append(r)
                 df = pd.DataFrame(rows)
                 for fz, km in msk.items():
                     current_km[fz] = km
