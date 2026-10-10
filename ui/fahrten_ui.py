@@ -394,8 +394,13 @@ def render(username):
             monate_liste = [monat]
         progress = st.progress(0, text="Generiere Fahrten…")
         try:
+            anchor = get_or_create_anchor(username, jahr, fahrzeuge_df)
+            fzg_gen = fahrzeuge_df.copy()
+            if anchor:
+                fzg_gen["start_km_vorjahr"] = fzg_gen["id"].map(
+                    lambda x: anchor.get(int(x)) if pd.notna(x) else None)
             generated, current_km = generiere_monate(
-                jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df, keywords, params)
+                jahr, monate_liste, user_info, fzg_gen, zeitraeume_df, keywords, params)
             progress.empty()
             generated, anz_fix = korrigiere_geschwindigkeiten_generated(generated)
             flags_map = pruefe_alle_monate(generated)
@@ -412,11 +417,11 @@ def render(username):
                     lines.append(f"• {fz.get('bezeichnung', '?')}: **{int(current_km[fz_id]):,} km**")
             if lines:
                 st.info("🚗 **Endkilometerstand pro Fahrzeug:**\n" + "\n".join(lines))
-                try:
-                    update_start_km(username, current_km)
-                    st.toast("Endkilometer als Startkilometer gespeichert!")
+                                try:
+                    set_start_km(username, jahr + 1, current_km)
+                    st.toast(f"Startkilometer fuer {jahr + 1} vorbelegt!")
                 except DatabaseError as e:
-                    st.warning(f"Endkilometer konnten nicht gespeichert werden: {e}")
+                    st.warning(f"Startkilometer fuer {jahr + 1} konnten nicht gespeichert werden: {e}")
             try:
                 for key, data in generated.items():
                     save_month(username, key[0], key[1], data["data"])
@@ -430,6 +435,16 @@ def render(username):
     # ---- Löschen ----
     with st.expander("🗑️ Ansicht zurücksetzen / Jahr löschen"):
         if st.button("🔄 Ansicht zurücksetzen (Daten bleiben in der Cloud)"):
+                    st.markdown("**Jahres-Startwerte:**")
+        st.caption(f"Startanker fuer {jahr} loeschen - beim naechsten Speichern/Generieren "
+                   "werden die Startwerte neu aus 'Start-KM (Vorjahr)' uebernommen.")
+        if st.button(f"🔄 Startwerte fuer {jahr} neu einlesen"):
+            try:
+                delete_anchor(username, jahr)
+                st.toast(f"Startwerte fuer {jahr} geloescht.")
+                st.rerun()
+            except DatabaseError as e:
+                st.error(str(e))
             st.session_state["fahrten_df"] = None
             st.session_state["generated_months_data"] = {}
             st.session_state.pop("pruef_ergebnis", None)
