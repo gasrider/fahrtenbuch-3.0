@@ -151,9 +151,7 @@ def wende_hu_korrekturen_an(generated_months_data, fahrzeuge_df, corrections,
         hu_angelegt = False
         for key in sorted(generated_months_data.keys()):
             df = generated_months_data[key].get("data")
-            if df is None:
-                continue
-            if df.empty:
+            if df is None or df.empty:
                 continue
             mask_fz = df['fahrzeug_id'] == fz_id
             for idx in df[mask_fz].index:
