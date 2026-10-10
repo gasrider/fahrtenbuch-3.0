@@ -13,7 +13,6 @@ def process_fahrzeuge(file) -> pd.DataFrame:
     df = coalesce(df, ["bezeichnung", "fahrzeug", "name", "modell"], "bezeichnung")
     df = coalesce(df, ["kennzeichen", "kennz"], "kennzeichen")
 
-    # Endkilometer-Spalten erkennen (endkilometer_YYYY, endkm_YYYY, endkm, kilometerstand_ende …)
     _endkm_col = None
     for c in df.columns:
         cl = str(c).lower()
@@ -29,7 +28,6 @@ def process_fahrzeuge(file) -> pd.DataFrame:
     if _endkm_col and _endkm_col in df.columns:
         df["start_km_vorjahr"] = pd.to_numeric(df["start_km_vorjahr"], errors="coerce").fillna(0)
         df["_endkm_vals"] = pd.to_numeric(df[_endkm_col], errors="coerce").fillna(0)
-        # Nur ueberschreiben, wo start_km_vorjahr 0/leer ist
         df["start_km_vorjahr"] = df["start_km_vorjahr"].where(df["start_km_vorjahr"] != 0,
                                                               df["_endkm_vals"])
         df.drop(columns=["_endkm_vals"], inplace=True, errors="ignore")
@@ -45,7 +43,6 @@ def process_fahrzeuge(file) -> pd.DataFrame:
     if "dienstlich_quote" not in df.columns:
         df["dienstlich_quote"] = 90
 
-    # >>> DER ENTSCHEIDENDE FIX: Excel-IDs weg! <<<
     df.drop(columns=["id"], inplace=True, errors="ignore")
 
     df["start_km_vorjahr"] = pd.to_numeric(df["start_km_vorjahr"], errors="coerce").fillna(0).astype(int)
@@ -69,7 +66,6 @@ def process_zeitraeume(file, fahrzeuge_df) -> pd.DataFrame:
             df[col] = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
 
     mapped = pd.Series([pd.NA] * len(df), dtype="Int64")
-    # Bevorzugt ueber KENNZEICHEN / BEZEICHNUNG zuordnen (stabil gegen ID-Wechsel)
     if "kennzeichen" in df.columns and "kennzeichen" in fahrzeuge_df.columns:
         m = df["kennzeichen"].astype(str).str.strip().str.upper()
         fk = fahrzeuge_df.set_index(
@@ -80,7 +76,6 @@ def process_zeitraeume(file, fahrzeuge_df) -> pd.DataFrame:
         fk2 = fahrzeuge_df.set_index(
             fahrzeuge_df["bezeichnung"].astype(str).str.strip().str.upper())["id"]
         mapped = mapped.fillna(m2.map(fk2).astype("Int64"))
-    # Nur fuer nicht zugeordnete Zeilen: numerische fahrzeug_id aus Excel (Letzter Fallback)
     if "fahrzeug_id" in df.columns:
         id_coerced = pd.to_numeric(df["fahrzeug_id"], errors="coerce").astype("Int64")
         mapped = mapped.fillna(id_coerced)
