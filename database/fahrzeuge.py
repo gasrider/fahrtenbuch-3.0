@@ -13,9 +13,7 @@ def _clean(value) -> str:
 
 
 def save_fahrzeuge(username, df) -> pd.DataFrame:
-    """Speichert Fahrzeuge OHNE die IDs zu veraendern:
-    Vorhandene IDs werden aktualisiert, neue eingefuegt, entfernte geloescht.
-    Wichtig, damit die fahrzeug_id in den generierten Fahrten gueltig bleibt!"""
+    """Speichert Fahrzeuge OHNE die IDs zu veraendern."""
     try:
         alt = supabase.table("fahrzeuge").select("id").eq("username", username).execute()
         alte_ids = {int(r["id"]) for r in (alt.data or []) if r.get("id") is not None}
@@ -92,12 +90,14 @@ def load_fahrzeuge(username) -> pd.DataFrame:
     except Exception as e:
         raise DatabaseError(f"Fahrzeuge laden fehlgeschlagen: {e}") from e
     return pd.DataFrame(columns=DEFAULT_VEHICLES_COLUMNS)
-    def update_start_km(username, current_km: dict) -> bool:
-        """Speichert Endkilometerstaende als start_km_vorjahr (fuer das Folgejahr)."""
-        try:
-            for fz_id, km in current_km.items():
-                supabase.table("fahrzeuge").update({"start_km_vorjahr": int(km)}) \
-                     .eq("id", int(fz_id)).eq("username", username).execute()
-            return True
-       except Exception as e:
-            raise DatabaseError(f"Endkilometer speichern fehlgeschlagen: {e}") from e
+
+
+def update_start_km(username, current_km: dict) -> bool:
+    """Speichert Endkilometerstaende als start_km_vorjahr (fuer das Folgejahr)."""
+    try:
+        for fz_id, km in current_km.items():
+            supabase.table("fahrzeuge").update({"start_km_vorjahr": int(km)}) \
+                .eq("id", int(fz_id)).eq("username", username).execute()
+        return True
+    except Exception as e:
+        raise DatabaseError(f"Endkilometer speichern fehlgeschlagen: {e}") from e
