@@ -121,7 +121,7 @@ def render(username):
         st.error(str(e))
         return
 
-    # ================= JAHRSAUSWAHL =================
+        # ================= JAHRSAUSWAHL =================
     try:
         verfuegbare_jahre = load_verfuegbare_jahre(username)
     except DatabaseError:
@@ -132,9 +132,9 @@ def render(username):
     if _akt in optionen:
         standard_index = optionen.index(_akt)
     else:
-        standard_index = len(optionen) - 1
+        standard_index = optionen.index(heute) if heute in optionen else len(optionen) - 1
     jahr = int(st.selectbox(
-        "📅 Jahr öffnen – gespeicherte Fahrten & Einstellungen werden automatisch geladen",
+        "Jahr oeffnen - gespeicherte Fahrten & Einstellungen werden automatisch geladen",
         optionen, index=standard_index, key="jahr_auswahl"))
 
     try:
@@ -155,17 +155,17 @@ def render(username):
         monate_jahr = [m for (jj, m) in year_data.keys()]
         if st.session_state.get("aktueller_monat") not in monate_jahr:
             st.session_state["aktueller_monat"] = max(monate_jahr)
-        msg = f"📂 Jahr {jahr} geöffnet: {len(year_data)} Monat(e) mit gespeicherten Fahrten"
+        msg = f"Jahr {jahr} geoeffnet: {len(year_data)} Monat(e) mit gespeicherten Fahrten"
         if saved:
-            msg += " – Generierungs-Einstellungen wurden wiederhergestellt."
+            msg += " - Generierungs-Einstellungen wurden wiederhergestellt."
         st.success(msg)
     else:
         if st.session_state.get("aktuelles_jahr") != jahr:
             st.session_state["generated_months_data"] = {}
             st.session_state["fahrten_df"] = None
             st.session_state["aktuelles_jahr"] = jahr
-        st.info(f"Für {jahr} sind noch keine Fahrten gespeichert – unten generieren.")
-
+        st.info(f"Für {jahr} sind noch keine Fahrten gespeichert - unten generieren. "
+                "Gespeicherte Einstellungen dieses Jahres werden angezeigt.")
     # ================= UPLOADS & KEYWORDS =================
     st.markdown("---")
     st.subheader("📥 Excel-Dateien hochladen (optional)")
