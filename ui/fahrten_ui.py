@@ -127,7 +127,7 @@ def render(username):
     except DatabaseError:
         verfuegbare_jahre = []
     heute = date.today().year
-    optionen = sorted(set(verfuegbare_jahre) | {heute, heute + 1, heute + 2})
+    optionen = sorted(set(verfuegbare_jahre) | set(range(heute - 10, heute + 3)))
     _akt = st.session_state.get("aktuelles_jahr", heute)
     if _akt in optionen:
         standard_index = optionen.index(_akt)
