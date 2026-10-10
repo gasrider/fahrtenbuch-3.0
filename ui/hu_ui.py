@@ -148,14 +148,16 @@ def render(username):
                         "generieren.")
                 return
             settings = load_settings(username)
-            with st.spinner("Wende HU-Korrekturen an..."):
-                gen, meldungen = wende_hu_korrekturen_an(
+                       with st.spinner("Wende HU-Korrekturen an..."):
+                gen, km_ende, meldungen = wende_hu_korrekturen_an(
                     gen, fahrzeuge, daten, pd.DataFrame(columns=["Ort", "Zweck"]),
                     settings.get("wohnort", ""))
                 for m in meldungen:
                     st.write(m)
                 for (j, m), d in gen.items():
                     save_month(username, j, m, d["data"])
-            st.success("Fahrten wurden an die HU angepasst und gespeichert!")
+                from database.fahrzeuge import update_start_km
+                update_start_km(username, km_ende)
+            st.success("Fahrten angepasst. Jahres-Endkilometer als Startwert gespeichert!")
         except DatabaseError as e:
             st.error(str(e))
