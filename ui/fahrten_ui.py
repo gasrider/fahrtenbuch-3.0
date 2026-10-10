@@ -459,7 +459,7 @@ def render(username):
                 st.session_state["generated_months_data"] = {}
                 st.session_state["fahrten_df"] = None
                 st.session_state.pop("pruef_ergebnis", None)
-                st.session_state["jahr_auswahl"] = heute
+                st.session_state.pop("jahr_auswahl", None)
                 st.toast(f"Jahr {jahr} geloescht.")
                 st.rerun()
             except DatabaseError as e:
