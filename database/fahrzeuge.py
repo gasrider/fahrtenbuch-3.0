@@ -13,35 +13,65 @@ def _clean(value) -> str:
 
 
 def save_fahrzeuge(username, df) -> pd.DataFrame:
-    """Speichert Fahrzeuge (Delete+Insert) und liefert die frisch geladenen
-    Datensätze (mit neuen IDs) zurück – wichtig für die Zeitraum-Zuordnung."""
+    """Speichert Fahrzeuge OHNE die IDs zu veraendern:
+    Vorhandene IDs werden aktualisiert, neue eingefuegt, entfernte geloescht.
+    Wichtig, damit die fahrzeug_id in den generierten Fahrten gueltig bleibt!"""
     try:
-        supabase.table("fahrzeuge").delete().eq("username", username).execute()
-        df = df.dropna(how='all')
-        rows = []
-        for _, row in df.iterrows():
-            rows.append({
-                "username": username,
-                "bezeichnung": _clean(row.get("bezeichnung")),
-                "kennzeichen": _clean(row.get("kennzeichen")),
-                "start_km_vorjahr": _safe_int(row.get("start_km_vorjahr")),
-                "privat_km_min": _safe_int(row.get("privat_km_min")),
-                "privat_km_max": _safe_int(row.get("privat_km_max")),
-                "dienstlich_quote": _safe_int(row.get("dienstlich_quote"), 90),
-            })
-        rows = [r for r in rows if r["bezeichnung"]]
-        if rows:
+        alt = supabase.table("fahrzeuge").select("id").eq("username", username).execute()
+        alte_ids = {int(r["id"]) for r in (alt.data or []) if r.get("id") is not None}
+
+        behalten = set()
+        updates, inserts = [], []
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                bez = _clean(row.get("bezeichnung"))
+                if not bez:
+                    continue
+                clean = {
+                    "username": username,
+                    "bezeichnung": bez,
+                    "kennzeichen": _clean(row.get("kennzeichen")),
+                    "start_km_vorjahr": _safe_int(row.get("start_km_vorjahr")),
+                    "privat_km_min": _safe_int(row.get("privat_km_min")),
+                    "privat_km_max": _safe_int(row.get("privat_km_max")),
+                    "dienstlich_quote": _safe_int(row.get("dienstlich_quote"), 90),
+                }
+                fid_raw = row.get("id")
+                fid = None
+                if fid_raw is not None and pd.notna(fid_raw):
+                    try:
+                        fid = int(fid_raw)
+                    except (ValueError, TypeError):
+                        fid = None
+                if fid is not None and fid in alte_ids:
+                    updates.append({**clean, "id": fid})
+                    behalten.add(fid)
+                else:
+                    inserts.append(clean)
+
+        for fid in (alte_ids - behalten):
+            supabase.table("fahrzeuge").delete().eq("id", fid).eq("username", username).execute()
+
+        for u in updates:
             try:
-                supabase.table("fahrzeuge").insert(rows).execute()
+                supabase.table("fahrzeuge").update(u).eq("id", u["id"]).execute()
+            except Exception as e:
+                if "dienstlich_quote" in str(e):
+                    u.pop("dienstlich_quote", None)
+                    supabase.table("fahrzeuge").update(u).eq("id", u["id"]).execute()
+                else:
+                    raise
+        if inserts:
+            try:
+                supabase.table("fahrzeuge").insert(inserts).execute()
             except Exception as e:
                 if "dienstlich_quote" in str(e):
                     fallback = [{k: v for k, v in r.items() if k != "dienstlich_quote"}
-                                for r in rows]
+                                for r in inserts]
                     supabase.table("fahrzeuge").insert(fallback).execute()
                     raise DatabaseError(
                         "Gespeichert, ABER: Spalte 'dienstlich_quote' fehlt in der "
-                        "DB-Tabelle 'fahrzeuge' (INTEGER, Default 90) – bitte anlegen."
-                    ) from e
+                        "DB (INTEGER, Default 90) - bitte anlegen.") from e
                 raise
         return load_fahrzeuge(username)
     except DatabaseError:
@@ -62,12 +92,3 @@ def load_fahrzeuge(username) -> pd.DataFrame:
     except Exception as e:
         raise DatabaseError(f"Fahrzeuge laden fehlgeschlagen: {e}") from e
     return pd.DataFrame(columns=DEFAULT_VEHICLES_COLUMNS)
-def update_start_km(username, current_km: dict) -> bool:
-    """Speichert Endkilometerstände als start_km_vorjahr (wie Original nach Jahresgenerierung)."""
-    try:
-        for fz_id, km in current_km.items():
-            supabase.table("fahrzeuge").update({"start_km_vorjahr": int(km)}) \
-                .eq("id", int(fz_id)).eq("username", username).execute()
-        return True
-    except Exception as e:
-        raise DatabaseError(f"Endkilometer speichern fehlgeschlagen: {e}") from e
