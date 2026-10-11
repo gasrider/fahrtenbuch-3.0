@@ -3,6 +3,7 @@ import streamlit as st
 from ui.stammdaten import render as render_stammdaten
 from ui.fahrten_ui import render as render_generator
 from ui.fahrzeuge_ui import render as render_fahrzeuge
+from ui.privat_km_ui import render as render_privat_km
 from ui.pruefung_ui import render as render_pruefung
 from ui.export_ui import render as render_export
 from ui.admin_ui import render as render_admin
@@ -20,9 +21,9 @@ def render_main():
             st.rerun()
     st.title("Fahrtenbuch Generator - Multi-User Edition")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "Stammdaten", "Generator", "Fahrzeuge & Orte",
-        "Plausibilitaetspruefung", "Export & HU", "Admin"])
+        "Privat-KM verteilen", "Plausibilitaetspruefung", "Export & HU", "Admin"])
     with tab1:
         render_stammdaten(username)
     with tab2:
@@ -30,8 +31,10 @@ def render_main():
     with tab3:
         render_fahrzeuge(username)
     with tab4:
-        render_pruefung(username)
+        render_privat_km(username)
     with tab5:
-        render_export(username)
+        render_pruefung(username)
     with tab6:
+        render_export(username)
+    with tab7:
         render_admin(username)
