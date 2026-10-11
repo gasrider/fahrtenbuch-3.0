@@ -1,10 +1,13 @@
-"""HU-Verwaltung: Eintraege bearbeiten/loeschen + optionale Fahrten-Anpassung."""
+"""HU-Verwaltung: Eintraege bearbeiten/loeschen + Fahrten-Anpassung mit
+realer Tacho-Logik (Ankunft Werkstatt = exakt km_at_hu, Weg zur Werkstatt
+privat, Kundenstopps dienstlich). Distanzen aus 'Fahrzeuge & Orte'."""
 import pandas as pd
 import streamlit as st
 
 from database import DatabaseError
 from database.fahrzeuge import load_fahrzeuge
 from database.orte import load_orte
+from database.orte import lade_distanzen
 from database.hu_corrections import load_hu_raw, save_hu_corrections
 from database.fahrten import load_year, save_month
 from database.settings import load_settings
@@ -17,7 +20,10 @@ from logic.hu_korrektur import wende_hu_korrekturen_an
 def render(username):
     st.subheader("HU-Korrekturen")
     st.caption("Zeilen koennen geaendert, ueber das Kaestchen links geloescht oder neu "
-               "angelegt werden. Stopps: Orte mit Komma getrennt eintragen.")
+               "angelegt werden. Stopps: Orte mit Komma getrennt eintragen. "
+               "Wichtig: Fuer Werkstatt- und Stopp-Orte muessen im Tab 'Fahrzeuge & "
+               "Orte' die Distanzen (km einfach) hinterlegt sein - sonst werden "
+               "generische Werte verwendet.")
     try:
         fahrzeuge = load_fahrzeuge(username)
         orte = load_orte(username)
@@ -117,8 +123,10 @@ def render(username):
     st.markdown("---")
     st.subheader("Fahrten an HU anpassen")
     st.warning("Nur EINMAL pro HU ausfuehren! Kilometer vor dem HU-Datum werden auf "
-               "den HU-Stand skaliert, danach kompensierend (Jahressumme bleibt "
-               "erhalten) und eine Werkstatt-Fahrt angelegt.")
+               "den HU-Stand skaliert (Tacho bei Ankunft Werkstatt = exakt der "
+               "eingegebene HU-Stand), danach kompensierend (Jahressumme bleibt "
+               "erhalten) und eine Werkstatt-Fahrt mit privatem Weg zur Werkstatt "
+               "angelegt.")
     if st.button("Fahrten anpassen (Kilometer neu berechnen)"):
         if edited.empty:
             st.warning("Keine HU-Eintraege vorhanden.")
@@ -150,16 +158,16 @@ def render(username):
                         "generieren.")
                 return
             settings = load_settings(username)
-            fzg_hu = fahrzeuge
-            if len(jahre) == 1:
-                anchor = get_or_create_anchor(username, jahre[0], fahrzeuge)
-                fzg_hu = fahrzeuge.copy()
-                fzg_hu["start_km_vorjahr"] = fzg_hu["id"].map(
-                    lambda x: anchor.get(int(x)) if pd.notna(x) else None)
+            distanzen = lade_distanzen(username)
+            jahr_ref = jahre[0]
+            anchor_hu = get_or_create_anchor(username, jahr_ref, fahrzeuge)
+            fzg_hu = fahrzeuge.copy()
+            fzg_hu["start_km_vorjahr"] = fzg_hu["id"].map(
+                lambda x: anchor_hu.get(int(x)) if pd.notna(x) else None)
             with st.spinner("Wende HU-Korrekturen an..."):
                 gen, km_ende, meldungen = wende_hu_korrekturen_an(
                     gen, fzg_hu, daten, pd.DataFrame(columns=["Ort", "Zweck"]),
-                    settings.get("wohnort", ""))
+                    settings.get("wohnort", ""), distanzen)
                 for m in meldungen:
                     st.write(m)
                 for (j, m), d in gen.items():
