@@ -184,7 +184,7 @@ def render(username):
             # IDs aus der DB per Bezeichnung zuordnen (Excel-IDs werden ignoriert)
             name_zu_id = {}
             if not fahrzeuge_df.empty:
-                for _, r in fahrzeuge.iterrows():
+                for _, r in fahrzeuge_df.iterrows():
                     if pd.notna(r.get("id")) and r.get("bezeichnung"):
                         name_zu_id[str(r["bezeichnung"]).strip().lower()] = int(r["id"])
             importiert["id"] = importiert["bezeichnung"].map(
