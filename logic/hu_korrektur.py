@@ -1,12 +1,7 @@
-"""HU-Korrektur v3: symmetrische Skalierung (vor/nach HU), Faktor-Deckel,
-Jahressumme bleibt erhalten, HU-Fahrt mit realistischen Kilometern.
-
-KM-Logik am HU-Tag:
-- PRIVAT: Weg zum Werkstattort (von Wohnort oder vom letzten Stopp vor HU);
-  ohne Stopps nach HU zusaetzlich die direkte Heimfahrt von der Werkstatt.
-- DIENSTLICH: Kundenstopps vor der HU sowie die Weiterfahrt ab der Werkstatt
-  zu den Stopps nach HU und zurueck zum Wohnort.
-- Entfernungen: Distanz-Tabelle (km einfach vom Wohnort, Tab 'Fahrzeuge & Orte')."""
+"""HU-Korrektur v4: Tacho bei Ankunft Werkstatt = exakt km_at_hu.
+Abfahrt am HU-Tag = km_at_hu minus Weg zur Werkstatt (Hinweg).
+Privat = Weg zur Werkstatt (+ direkte Heimfahrt ohne Nach-Stopps),
+dienstlich = Kundenstopps vor/nach der HU. Distanzen aus 'Orte & Distanzen'."""
 import re
 from datetime import datetime, timedelta
 
@@ -56,47 +51,56 @@ def _skaliere(df, factor):
 
 
 def _hu_kilometer(distanzen, werkstatt, stops_vor, stops_nach, rng, meldungen):
-    """Berechnet (km_dienstlich, km_privat) fuer die HU-Fahrt."""
+    """Liefert (km_d, km_p, hinweg, nachweg) für den HU-Tag.
+    hinweg = km von Wohnort (ueber Stopps) bis zur Werkstatt,
+    nachweg = km ab Werkstatt bis heim."""
     dist = distanzen if distanzen else {}
     dw = int(dist.get(str(werkstatt).strip(), 0))
     if dw <= 0:
         meldungen.append(f"- HINWEIS: Keine Distanz fuer '{werkstatt}' hinterlegt "
-                         "(Fahrzeuge & Orte -> km einfach). Nutze generische Werte.")
-        total_stops = len(stops_vor) + 1 + len(stops_nach)
-        km_d = int(rng.integers(20, 40)) + total_stops * int(rng.integers(10, 20))
-        return max(km_d, 15), 0
+                         "(Tab 'Fahrzeuge & Orte' -> km einfach). Nutze generische Werte!")
+        km_d = int(rng.integers(20, 40)) + (len(stops_vor) + len(stops_nach)) * int(rng.integers(10, 20))
+        km_p = int(rng.integers(15, 30))
+        return max(km_d, 10), km_p, km_p, km_p
 
     km_d = 0
     km_p = 0
     vorherige = 0  # Wohnort = Referenz 0
 
-    # Hinweg: Kundenstopps davor dienstlich, letzte Teilstrecke zur Werkstatt privat
+    # Hinweg: Stopps davor dienstlich, letzte Teilstrecke zur Werkstatt privat
     for s in stops_vor:
         ds = int(dist.get(str(s).strip(), 0))
         if ds <= 0:
-            meldungen.append(f"- HINWEIS: Keine Distanz fuer Stopp '{s}' - "
-                             "Segment pauschal mit 10 km gerechnet.")
+            meldungen.append(f"- HINWEIS: Keine Distanz fuer '{s}' - Segment +10 km.")
             ds = vorherige + 10
-        km_d += max(abs(ds - vorherige), 5)
+        seg = max(abs(ds - vorherige), 5)
+        km_d += seg
         vorherige = ds
-    km_p += max(abs(dw - vorherige), 5)
+    seg_werk = max(abs(dw - vorherige), 5)
+    km_p += seg_werk
+    hinweg = km_d + seg_werk
 
-    # Ab der Werkstatt: alles dienstlich (Stopps nach HU + Rueckweg zum Wohnort)
+    # Nachweg: ab Werkstatt alles dienstlich (Stopps + Rueckweg) bzw. privat heim
+    nachweg = 0
     vorherige = dw
     for s in stops_nach:
         ds = int(dist.get(str(s).strip(), 0))
         if ds <= 0:
-            meldungen.append(f"- HINWEIS: Keine Distanz fuer Stopp '{s}' - "
-                             "Segment pauschal mit 10 km gerechnet.")
+            meldungen.append(f"- HINWEIS: Keine Distanz fuer '{s}' - Segment +10 km.")
             ds = vorherige + 10
-        km_d += max(abs(ds - vorherige), 5)
+        seg = max(abs(ds - vorherige), 5)
+        km_d += seg
+        nachweg += seg
         vorherige = ds
     if stops_nach:
-        km_d += max(vorherige, 5)   # Rueckweg vom letzten Kunden zum Wohnort
+        rueck = max(vorherige, 5)
+        km_d += rueck
+        nachweg += rueck
     else:
-        km_p += dw                  # direkte Heimfahrt von der HU = privat
+        km_p += dw
+        nachweg += dw
 
-    return max(km_d, 10), km_p
+    return max(km_d, 10), km_p, hinweg, nachweg
 
 
 def wende_hu_korrekturen_an(generated_months_data, fahrzeuge_df, corrections,
@@ -146,7 +150,8 @@ def wende_hu_korrekturen_an(generated_months_data, fahrzeuge_df, corrections,
         stops_vor = c.get('stopps_vor_hu', []) or []
         stops_nach = c.get('stopps_nach_hu', []) or []
         fz_name = id_zu_name.get(fz_id, f'FZ {fz_id}')
-        meldungen.append(f"**HU {fz_name} am {hu_date.strftime('%d.%m.%Y')}**")
+        meldungen.append(f"**HU {fz_name} am {hu_date.strftime('%d.%m.%Y')} "
+                         f"(Tacho laut HU: {km_at_hu:,} km)**")
 
         alle_fahrten = sammle_fahrten()
         if fz_id not in alle_fahrten or alle_fahrten[fz_id].empty:
@@ -165,16 +170,18 @@ def wende_hu_korrekturen_an(generated_months_data, fahrzeuge_df, corrections,
         sum_tag = _safe_int(am_tag['km_d'].sum()) + _safe_int(am_tag['km_p'].sum())
         jahres_ende = start_km + sum_vor + sum_tag + sum_nach
 
-        ziel_vor = km_at_hu - start_km
+        hu_km_d, hu_km_p, hinweg, nachweg = _hu_kilometer(
+            distanzen, werkstatt, stops_vor, stops_nach, rng, meldungen)
+        hu_km = hu_km_d + hu_km_p
+
+        # >>> KERN: Tacho bei Ankunft Werkstatt = km_at_hu.
+        # Abfahrt am HU-Tag = km_at_hu - hinweg. Der Weg zur Werkstatt
+        # wird also VON der Abfahrt abgezogen. <<<
+        ziel_vor = km_at_hu - start_km - hinweg
         faktor_vor = (ziel_vor / sum_vor) if (sum_vor > 0 and ziel_vor > 0) else 1.0
+        abfahrt_hu_tag = km_at_hu - hinweg
 
-        hu_km_d, hu_km_p = _hu_kilometer(distanzen, werkstatt, stops_vor,
-                                         stops_nach, rng, meldungen)
-        hu_km = hu_km_d
-        meldungen.append(f"- HU-Fahrt: {hu_km_d} km dienstlich, "
-                         f"{hu_km_p} km privat (Weg zur Werkstatt).")
-
-        ziel_nach = jahres_ende - km_at_hu - hu_km_d - hu_km_p
+        ziel_nach = jahres_ende - km_at_hu - nachweg
         faktor_nach = (ziel_nach / sum_nach) if (sum_nach > 0 and ziel_nach > 0) else 1.0
 
         fv = max(min(faktor_vor, FAKTOR_MAX), FAKTOR_MIN)
@@ -184,6 +191,11 @@ def wende_hu_korrekturen_an(generated_months_data, fahrzeuge_df, corrections,
                              f"(Faktor waere {faktor_vor:.2f}) - auf {fv:.2f} begrenzt.")
         if abs(fn - faktor_nach) > 0.01:
             meldungen.append(f"- Faktor nach HU auf {fn:.2f} begrenzt.")
+        meldungen.append(f"- HU-Fahrt: {hu_km_d} km dienstlich, {hu_km_p} km privat "
+                         f"(Weg zur Werkstatt)")
+        meldungen.append(f"- Abfahrt am HU-Tag: **{abfahrt_hu_tag:,} km** "
+                         f"(= {km_at_hu:,} minus {hinweg} km Weg zur Werkstatt) "
+                         "- Tacho zeigt bei Ankunft Werkstatt genau den HU-Stand.")
         meldungen.append(f"- Faktor vor HU: {fv:.3f} | nach HU: {fn:.3f} "
                          "(Jahressumme bleibt erhalten)")
 
