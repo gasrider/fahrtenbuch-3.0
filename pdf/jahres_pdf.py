@@ -9,7 +9,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 
 from logic.constants import MONATE
 from logic.helpers import _safe_int, _safe_float, _safe_dauer_min
-from logic.taggeld import berechne_taggeld_betrag, taggeld_params_aus_settings
+from logic.taggeld import taggeld_fuer_fahrt, taggeld_params_aus_settings
 
 
 def create_jahres_pdf(monate_dict, jahr, user_info, fahrzeuge_df):
@@ -51,8 +51,7 @@ def create_jahres_pdf(monate_dict, jahr, user_info, fahrzeuge_df):
             continue
         sd = int(df["km_d"].sum())
         sp = int(df["km_p"].sum())
-        stag = sum(berechne_taggeld_betrag(_safe_dauer_min(r["dauer"]), params)
-                   for _, r in df.iterrows())
+        stag = sum_taggeld = sum(taggeld_fuer_fahrt(_safe_dauer_min(r["dauer"]), _safe_int(r.get("km_d")), taggeld_params) for _, r in df.iterrows())
         mg = sd * km_satz
         total_d += sd; total_p += sp; total_km_geld += mg; total_taggeld += stag
         data.append([mname, sd, sp,
