@@ -7,10 +7,21 @@ from database.zeitraeume import load_zeitraeume, save_zeitraeume
 from database.orte import load_orte, save_orte
 from database.orte import lade_distanzen
 from database.orte import speichere_distanzen
+from database.orte import lade_distanz_matrix
+from database.orte import lade_matrix_zeilen
+from database.orte import speichere_distanz_matrix
+from database.orte import speichere_geo_cache
+from database.settings import load_settings
 from logic.helpers import to_date
 from logic.excel_import import process_fahrzeuge
 from logic.excel_import import process_zeitraeume
 from logic.excel_import import lade_orte
+from services.routing import berechne_distanz_matrix
+from services.routing import norm_key
+
+SQL_HINWEIS = ("Falls 'relation ... does not exist' gemeldet wird: Die beiden "
+               "Tabellen 'ort_koordinaten' und 'distanz_matrix' muessen einmalig "
+               "im Supabase SQL-Editor angelegt werden (SQL aus der Anleitung).")
 
 
 def _nonce(key):
@@ -29,6 +40,12 @@ def render(username):
     except DatabaseError as e:
         st.error(str(e))
         return
+
+    try:
+        matrix_zeilen = lade_matrix_zeilen(username)
+    except DatabaseError as e:
+        matrix_zeilen = []
+        st.warning(f"Distanz-Matrix nicht ladbar: {e} {SQL_HINWEIS}")
 
     # ================= Excel-Import =================
     st.markdown("### Excel-Import")
@@ -209,8 +226,10 @@ def render(username):
 
     # ================= Orte & Distanzen =================
     st.markdown("### Orte & Distanzen")
-    st.caption("Pro Ort die einfache Fahrstrecke vom Wohnort in km - die HU-Korrektur "
-               "nutzt diese Werte fuer die privaten Kilometer zur Werkstatt.")
+    st.caption("Pro Ort die einfache Fahrstrecke vom Wohnort in km (wird unten "
+               "automatisch aus der Online-Karte gefuellt) plus die "
+               "Ort-zu-Ort-Distanz-Matrix. Generator und HU-Korrektur nutzen "
+               "diese Werte fuer realistische Kilometer.")
 
     if orte:
         dist_df = pd.DataFrame([{"Ort": o, "km einfach": distanzen.get(o, 0)}
@@ -234,16 +253,166 @@ def render(username):
                 st.success("Distanzen gespeichert.")
             except DatabaseError as e:
                 st.error(str(e))
+    else:
+        st.info("Noch keine Orte gespeichert - Excel hochladen oder unten hinzufuegen.")
 
-        loesch = st.multiselect("Zu loeschende Orte markieren", orte)
-        if loesch and st.button("Ausgewaehlte Orte loeschen"):
+    # --- Online-Berechnung (OpenStreetMap / OSRM) ---
+    st.markdown("##### Distanzen automatisch berechnen (Online-Karte)")
+    st.caption("Sucht alle Orte auf der Karte (OpenStreetMap) und berechnet die "
+               "echten Fahrstrecken zwischen allen Orten (OSRM-Routing, kein "
+               "API-Key noetig). Die Ergebnisse landen in der Distanz-Matrix "
+               "unten und werden vom Generator und der HU-Korrektur automatisch "
+               "verwendet. Erste Berechnung je nach Anzahl Orte ca. 2-5 Minuten, "
+               "danach wird alles gespeichert und nur noch nachgerechnet, was fehlt.")
+    zusatz_text = st.text_input(
+        "Zusaetzliche Orte (z. B. Werkstaetten), kommagetrennt",
+        key="zusatz_orte_input")
+    nur_fehlende = st.checkbox(
+        "Nur fehlende Strecken berechnen (vorhandene nicht ueberschreiben)",
+        value=True)
+    if st.button("Distanzen online berechnen", type="primary"):
+        st.session_state.pop("geo_summary", None)
+        zusatz = [s.strip() for s in (zusatz_text or "").split(",") if s.strip()]
+        try:
             try:
-                save_orte(username, [o for o in orte if o not in loesch])
+                user_info = load_settings(username)
+            except DatabaseError:
+                user_info = {}
+            wohnort_raw = str(user_info.get("wohnort", "") or "")
+            wohnort_c = (wohnort_raw.split(",")[-1].strip()
+                         if "," in wohnort_raw else wohnort_raw.strip())
+            dienstort_raw = str(user_info.get("dienstort", "") or "")
+            dienstort_c = (dienstort_raw.split(",")[-1].strip()
+                           if "," in dienstort_raw else dienstort_raw.strip())
+            if not wohnort_c:
+                st.error("Kein Wohnort in den Einstellungen hinterlegt - bitte "
+                         "zuerst im Login-/Profil-Bereich setzen.")
+                return
+            vorhandene = lade_distanz_matrix(username) if nur_fehlende else {}
+            with st.status("Distanzen werden berechnet...", expanded=True) as status:
+                bar = st.progress(0.0, text="Start...")
+                txt = st.empty()
+
+                def _prog(fertig, gesamt, msg):
+                    frac = min(1.0, float(fertig) / float(gesamt)) if gesamt else 1.0
+                    try:
+                        bar.progress(frac, text=msg)
+                    except Exception:
+                        txt.write(msg)
+
+                koordinaten, matrix_neu, meldungen = berechne_distanz_matrix(
+                    list(orte), wohnort_c, dienstort_c, zusatz, vorhandene, _prog)
+                for m in meldungen:
+                    st.write(m)
+                status.update(label="Distanzen berechnet.", state="complete")
+            if koordinaten:
+                speichere_geo_cache(username, koordinaten)
+            if matrix_neu:
+                quelle_alt = {(str(z["ort_a"]).strip().lower(),
+                               str(z["ort_b"]).strip().lower()): z["quelle"]
+                              for z in matrix_zeilen}
+                zeilen = []
+                for (a, b), km in matrix_neu.items():
+                    disp_a = koordinaten.get(a, {}).get("ort") or a
+                    disp_b = koordinaten.get(b, {}).get("ort") or b
+                    zeilen.append({"ort_a": disp_a, "ort_b": disp_b,
+                                   "km": int(km),
+                                   "quelle": quelle_alt.get((a, b), "osrm")})
+                speichere_distanz_matrix(username, zeilen)
+            summary = []
+            home_k = norm_key(wohnort_c)
+            if matrix_neu:
+                summary.append(f"{len(matrix_neu)} Strecken in der Distanz-Matrix "
+                               "gespeichert.")
+            if koordinaten.get(home_k, {}).get("ok") and orte:
+                neue_map = dict(distanzen)
+                aktualisiert = []
+                for o in orte:
+                    k = norm_key(o)
+                    key = (home_k, k) if home_k <= k else (k, home_k)
+                    km_neu = matrix_neu.get(key)
+                    if km_neu and int(km_neu) > 0:
+                        if int(neue_map.get(o, 0) or 0) != int(km_neu):
+                            aktualisiert.append(
+                                f"{o}: {neue_map.get(o, 0) or 0} -> {int(km_neu)} km")
+                        neue_map[o] = int(km_neu)
+                speichere_distanzen(username, neue_map)
+                if aktualisiert:
+                    summary.append("'km einfach' automatisch aktualisiert: "
+                                   + ", ".join(aktualisiert))
+            summary.append("Wichtig: Jahr im Generator neu generieren, damit die "
+                           "neuen Kilometer einfliessen (bereits gespeicherte "
+                           "Fahrten bleiben unveraendert).")
+            st.session_state["geo_summary"] = summary
+            st.rerun()
+        except DatabaseError as e:
+            st.error(f"{e} {SQL_HINWEIS}")
+        except Exception as e:
+            st.error(f"Online-Berechnung fehlgeschlagen: {e}")
+
+    if st.session_state.get("geo_summary"):
+        for line in st.session_state["geo_summary"]:
+            st.write(line)
+        if st.button("Hinweis ausblenden"):
+            st.session_state.pop("geo_summary", None)
+            st.rerun()
+
+    # --- Distanz-Matrix (Ort zu Ort) ---
+    st.markdown("##### Distanz-Matrix (Ort zu Ort)")
+    st.caption("Echte Fahrstrecken zwischen allen Orten (von der Online-Karte "
+               "oder manuell korrigiert). Jede Strecke gilt in beide Richtungen. "
+               "Km-Werte hier aendern und speichern ueberschreibt die "
+               "Online-Werte - nuetzlich, falls ein Ort falsch zugeordnet wurde.")
+    if matrix_zeilen:
+        mdf = pd.DataFrame([{"Ort A": z["ort_a"], "Ort B": z["ort_b"],
+                             "km": z["km"], "Quelle": z["quelle"]}
+                            for z in matrix_zeilen])
+        alt_map = {(z["ort_a"].strip().lower(), z["ort_b"].strip().lower()):
+                   (z["km"], z["quelle"]) for z in matrix_zeilen}
+        edit_m = st.data_editor(
+            mdf, use_container_width=True, key="matrix_editor",
+            column_config={
+                "Ort A": st.column_config.TextColumn("Ort A", disabled=True),
+                "Ort B": st.column_config.TextColumn("Ort B", disabled=True),
+                "km": st.column_config.NumberColumn("km", min_value=1, step=1),
+                "Quelle": st.column_config.TextColumn("Quelle", disabled=True),
+            })
+        if st.button("Matrix-Aenderungen speichern"):
+            try:
+                zeilen_neu = []
+                for _, r in edit_m.iterrows():
+                    a = str(r["Ort A"] or "").strip()
+                    b = str(r["Ort B"] or "").strip()
+                    try:
+                        km = int(r["km"] or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if not a or not b or km <= 0:
+                        continue
+                    alt = alt_map.get((a.lower(), b.lower()))
+                    if alt is None:
+                        quelle = "manuell"
+                    else:
+                        km_alt, q_alt = alt
+                        quelle = "manuell" if km != km_alt else q_alt
+                    zeilen_neu.append({"ort_a": a, "ort_b": b, "km": km,
+                                       "quelle": quelle})
+                speichere_distanz_matrix(username, zeilen_neu)
+                st.success("Distanz-Matrix gespeichert.")
                 st.rerun()
             except DatabaseError as e:
                 st.error(str(e))
     else:
-        st.info("Noch keine Orte gespeichert - Excel hochladen oder unten hinzufuegen.")
+        st.info("Noch keine Distanz-Matrix vorhanden - oben 'Distanzen online "
+                "berechnen' starten.")
+
+    loesch = st.multiselect("Zu loeschende Orte markieren", orte)
+    if loesch and st.button("Ausgewaehlte Orte loeschen"):
+        try:
+            save_orte(username, [o for o in orte if o not in loesch])
+            st.rerun()
+        except DatabaseError as e:
+            st.error(str(e))
 
     neu = st.text_input("Neuer Ort (manuell)")
     if st.button("Ort hinzufuegen") and neu.strip():
