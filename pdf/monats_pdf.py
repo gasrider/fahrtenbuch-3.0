@@ -10,7 +10,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 
 from logic.constants import MONATE, WOCHENTAGE_KURZ
 from logic.helpers import _safe_int, _safe_dauer_min
-from logic.taggeld import berechne_taggeld, berechne_taggeld_betrag, taggeld_params_aus_settings
+from logic.taggeld import berechne_taggeld, taggeld_fuer_fahrt, taggeld_params_aus_settings
 
 
 def create_monats_pdf(df, monat, jahr, user_info, fahrzeuge_df):
@@ -69,21 +69,18 @@ def create_monats_pdf(df, monat, jahr, user_info, fahrzeuge_df):
     data = [headers, sub]
     params = taggeld_params_aus_settings(user_info)
 
-    for _, r in df.iterrows():
-        dt = pd_to_dt(r["datum"])
-        tag = f"{WOCHENTAGE_KURZ[dt.weekday()]}.{dt.day:02d}."
+        for _, r in df.iterrows():
+        dt = pd.to_datetime(r["datum"]); german_day_abbr = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+        tag_name = german_day_abbr[dt.weekday()]; tag = f"{tag_name[:2]}.{dt.day:02d}."
         route_para = Paragraph(str(r["route"]), wrap_style)
         dauer_min = _safe_dauer_min(r["dauer"])
-        data.append([tag, str(r.get("abf", "00:00")), str(r.get("ank", "00:00")),
-                     str(r.get("dauer", "00:00")), route_para,
-                     _safe_int(r.get("abfahrt_km")), _safe_int(r.get("km_d")),
-                     _safe_int(r.get("km_p")),
-                     berechne_taggeld(dauer_min, params),
-                     str(r.get("fahrzeug", ""))])
+        km_d_zeile = _safe_int(r.get("km_d"))
+        taggeld_zeile = f"{taggeld_fuer_fahrt(dauer_min, km_d_zeile, taggeld_params):.2f}".replace('.', ',')
 
-    sum_d = int(df["km_d"].sum())
-    sum_p = int(df["km_p"].sum())
-    sum_t = sum(berechne_taggeld_betrag(_safe_dauer_min(r["dauer"]), params)
+        data.append([tag, str(r.get("abf", "00:00")), str(r.get("ank", "00:00")), str(r.get("dauer", "00:00")), route_para, _safe_int(r.get("abfahrt_km")), km_d_zeile, _safe_int(r.get("km_p")), taggeld_zeile, str(r.get("fahrzeug", ""))])
+    
+    sum_dienstl = int(df["km_d"].sum()); sum_privat = int(df["km_p"].sum())
+    sum_taggeld = sum(taggeld_fuer_fahrt(_safe_dauer_min(r["dauer"]), _safe_int(r.get("km_d")), taggeld_params) for _, r in df.iterrows())
                 for _, r in df.iterrows())
     data.append(["Einzelsummen:", "", "", "", "", "", sum_d, sum_p,
                  f"{sum_t:.2f}".replace('.', ','), ""])
