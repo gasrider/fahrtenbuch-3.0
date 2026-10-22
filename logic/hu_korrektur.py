@@ -1,7 +1,9 @@
-"""HU-Korrektur v4: Tacho bei Ankunft Werkstatt = exakt km_at_hu.
+"""HU-Korrektur v5: Tacho bei Ankunft Werkstatt = exakt km_at_hu.
 Abfahrt am HU-Tag = km_at_hu minus Weg zur Werkstatt (Hinweg).
 Privat = Weg zur Werkstatt (+ direkte Heimfahrt ohne Nach-Stopps),
-dienstlich = Kundenstopps vor/nach der HU. Distanzen aus 'Orte & Distanzen'."""
+dienstlich = Kundenstopps vor/nach der HU.
+Strecken: zuerst Online-Distanz-Matrix (echte Fahrstrecken), Fallback
+Differenz der km-einfach-Werte, Notfall generische Werte."""
 import re
 from datetime import datetime, timedelta
 
@@ -12,6 +14,10 @@ from logic.helpers import _safe_int
 
 FAKTOR_MIN = 0.5
 FAKTOR_MAX = 2.0
+
+
+def _norm(name):
+    return str(name or "").strip().lower()
 
 
 def _scale_dauer(dauer_str, factor):
@@ -50,66 +56,116 @@ def _skaliere(df, factor):
     return df
 
 
-def _hu_kilometer(distanzen, werkstatt, stops_vor, stops_nach, rng, meldungen):
+def _leg_km_matrix(matrix, dist, ort_a, ort_b):
+    """km fuer Teilstrecke A -> B: zuerst echte Fahrstrecke aus der
+    Distanz-Matrix (Online-Karte), Fallback Differenz der km-einfach-Werte
+    (min. 5), None wenn beide unbekannt."""
+    na, nb = _norm(ort_a), _norm(ort_b)
+    if na and nb and na != nb:
+        key = (na, nb) if na <= nb else (nb, na)
+        v = (matrix or {}).get(key)
+        if v is not None:
+            try:
+                v = int(v)
+                if v > 0:
+                    return v
+            except (TypeError, ValueError):
+                pass
+    da = dist.get(na)
+    db = dist.get(nb)
+    if da is None or db is None:
+        return None
+    return max(abs(int(da) - int(db)), 5)
+
+
+def _hu_kilometer(distanzen, matrix, wohnort, werkstatt, stops_vor,
+                  stops_nach, rng, meldungen):
     """Liefert (km_d, km_p, hinweg, nachweg) für den HU-Tag.
     hinweg = km von Wohnort (ueber Stopps) bis zur Werkstatt,
     nachweg = km ab Werkstatt bis heim."""
     dist = distanzen if distanzen else {}
-    dw = int(dist.get(str(werkstatt).strip(), 0))
-    if dw <= 0:
-        meldungen.append(f"- HINWEIS: Keine Distanz fuer '{werkstatt}' hinterlegt "
-                         "(Tab 'Fahrzeuge & Orte' -> km einfach). Nutze generische Werte!")
+    home = _norm(wohnort)
+    dw = int(dist.get(_norm(werkstatt), 0) or 0)
+    hat_matrix_werk = False
+    wkey = _norm(werkstatt)
+    for (a, b) in (matrix or {}):
+        if a == wkey or b == wkey:
+            hat_matrix_werk = True
+            break
+
+    if dw <= 0 and not hat_matrix_werk:
+        meldungen.append(f"- HINWEIS: Weder Distanz noch Online-Matrix fuer "
+                         f"'{werkstatt}' vorhanden (Tab 'Fahrzeuge & Orte' -> "
+                         "Distanzen online berechnen oder km einfach pflegen). "
+                         "Nutze generische Werte!")
         km_d = int(rng.integers(20, 40)) + (len(stops_vor) + len(stops_nach)) * int(rng.integers(10, 20))
         km_p = int(rng.integers(15, 30))
         return max(km_d, 10), km_p, km_p, km_p
 
     km_d = 0
     km_p = 0
-    vorherige = 0  # Wohnort = Referenz 0
+    vorherige = home  # Wohnort = Startpunkt
 
     # Hinweg: Stopps davor dienstlich, letzte Teilstrecke zur Werkstatt privat
     for s in stops_vor:
-        ds = int(dist.get(str(s).strip(), 0))
-        if ds <= 0:
+        seg = _leg_km_matrix(matrix, dist, vorherige, s)
+        if seg is None:
             meldungen.append(f"- HINWEIS: Keine Distanz fuer '{s}' - Segment +10 km.")
-            ds = vorherige + 10
-        seg = max(abs(ds - vorherige), 5)
+            seg = 10
         km_d += seg
-        vorherige = ds
-    seg_werk = max(abs(dw - vorherige), 5)
+        vorherige = s
+    seg_werk = _leg_km_matrix(matrix, dist, vorherige, werkstatt)
+    if seg_werk is None:
+        meldungen.append(f"- HINWEIS: Keine Distanz fuer '{werkstatt}' - Segment +10 km.")
+        seg_werk = 10
     km_p += seg_werk
     hinweg = km_d + seg_werk
 
     # Nachweg: ab Werkstatt alles dienstlich (Stopps + Rueckweg) bzw. privat heim
     nachweg = 0
-    vorherige = dw
+    vorherige = werkstatt
     for s in stops_nach:
-        ds = int(dist.get(str(s).strip(), 0))
-        if ds <= 0:
+        seg = _leg_km_matrix(matrix, dist, vorherige, s)
+        if seg is None:
             meldungen.append(f"- HINWEIS: Keine Distanz fuer '{s}' - Segment +10 km.")
-            ds = vorherige + 10
-        seg = max(abs(ds - vorherige), 5)
+            seg = 10
         km_d += seg
         nachweg += seg
-        vorherige = ds
+        vorherige = s
     if stops_nach:
-        rueck = max(vorherige, 5)
+        rueck = _leg_km_matrix(matrix, dist, vorherige, home)
+        if rueck is None:
+            rueck = max(int(dist.get(_norm(vorherige), 0) or 0), 5)
         km_d += rueck
         nachweg += rueck
     else:
-        km_p += dw
-        nachweg += dw
+        heim = _leg_km_matrix(matrix, dist, werkstatt, home)
+        if heim is None:
+            heim = max(dw, 5)
+        km_p += heim
+        nachweg += heim
 
     return max(km_d, 10), km_p, hinweg, nachweg
 
 
 def wende_hu_korrekturen_an(generated_months_data, fahrzeuge_df, corrections,
-                            keywords_df, wohnort_raw, distanzen=None):
+                            keywords_df, wohnort_raw, distanzen=None,
+                            matrix=None):
     rng = np.random.default_rng()
     meldungen = []
     wohnort = str(wohnort_raw or '')
     if ',' in wohnort:
         wohnort = re.sub(r'^[A-Za-z]?-?\d{4,5}\s+', '', wohnort.split(',')[-1].strip())
+
+    # Interne Distanz-Map: km-einfach normalisiert + Wohnort = 0
+    dist_internal = {}
+    for k, v in (distanzen or {}).items():
+        try:
+            dist_internal[_norm(k)] = max(0, int(v))
+        except (TypeError, ValueError):
+            continue
+    if wohnort:
+        dist_internal[_norm(wohnort)] = 0
 
     for key in generated_months_data:
         df = generated_months_data[key].get("data")
@@ -171,7 +227,8 @@ def wende_hu_korrekturen_an(generated_months_data, fahrzeuge_df, corrections,
         jahres_ende = start_km + sum_vor + sum_tag + sum_nach
 
         hu_km_d, hu_km_p, hinweg, nachweg = _hu_kilometer(
-            distanzen, werkstatt, stops_vor, stops_nach, rng, meldungen)
+            dist_internal, matrix, wohnort, werkstatt, stops_vor, stops_nach,
+            rng, meldungen)
         hu_km = hu_km_d + hu_km_p
 
         # >>> KERN: Tacho bei Ankunft Werkstatt = km_at_hu.
