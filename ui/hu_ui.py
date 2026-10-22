@@ -8,6 +8,7 @@ from database import DatabaseError
 from database.fahrzeuge import load_fahrzeuge
 from database.orte import load_orte
 from database.orte import lade_distanzen
+from database.orte import lade_distanz_matrix
 from database.hu_corrections import load_hu_raw, save_hu_corrections
 from database.fahrten import load_year, save_month
 from database.settings import load_settings
@@ -22,8 +23,8 @@ def render(username):
     st.caption("Zeilen koennen geaendert, ueber das Kaestchen links geloescht oder neu "
                "angelegt werden. Stopps: Orte mit Komma getrennt eintragen. "
                "Wichtig: Fuer Werkstatt- und Stopp-Orte muessen im Tab 'Fahrzeuge & "
-               "Orte' die Distanzen (km einfach) hinterlegt sein - sonst werden "
-               "generische Werte verwendet.")
+               "Orte' die Distanzen hinterlegt sein (am besten per 'Distanzen online "
+               "berechnen') - sonst werden generische Werte verwendet.")
     try:
         fahrzeuge = load_fahrzeuge(username)
         orte = load_orte(username)
@@ -159,6 +160,10 @@ def render(username):
                 return
             settings = load_settings(username)
             distanzen = lade_distanzen(username)
+            try:
+                matrix = lade_distanz_matrix(username)
+            except DatabaseError:
+                matrix = {}
             jahr_ref = jahre[0]
             anchor_hu = get_or_create_anchor(username, jahr_ref, fahrzeuge)
             fzg_hu = fahrzeuge.copy()
@@ -167,7 +172,7 @@ def render(username):
             with st.spinner("Wende HU-Korrekturen an..."):
                 gen, km_ende, meldungen = wende_hu_korrekturen_an(
                     gen, fzg_hu, daten, pd.DataFrame(columns=["Ort", "Zweck"]),
-                    settings.get("wohnort", ""), distanzen)
+                    settings.get("wohnort", ""), distanzen, matrix)
                 for m in meldungen:
                     st.write(m)
                 for (j, m), d in gen.items():
