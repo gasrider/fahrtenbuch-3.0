@@ -1,13 +1,31 @@
 """Fahrten-Generator. Zeitmodell v2: Dienstreisen starten um 08:00 und enden
-zwischen 17:00 und 22:00 (Ganztagestour, Stopps verteilt auf den Tag)."""
+zwischen 17:00 und 22:00 (Ganztagestour, Stopps verteilt auf den Tag).
+
+Kilometer-Logik v3 (Distanz-Matrix / Online-Karte):
+- Erst wird die Distanz-Matrix gefragt: {(ort_a, ort_b): km} - echte
+  Fahrstrecken von OpenStreetMap/OSRM, einmalig im Tab 'Fahrzeuge & Orte'
+  ueber den Button 'Distanzen online berechnen' geholt und in Supabase
+  gespeichert (Tabelle distanz_matrix). Das loest das alte Problem, dass
+  Ort-zu-Ort-KM als Differenz der Wohnort-Distanzen gerechnet wurden
+  (Zell am Moos -> Eugendorf: 8 km statt real ~24 km).
+- Fallback (wenn kein Matrix-Eintrag): Differenz der km-einfach-Werte
+  (Tabelle orte_distanz), mindestens MIN_LEG_KM.
+- Ganz ohne Pflege: Zufallswert 15-35 km + Hinweis nach der Generierung.
+Die Monats-Skalierung auf die KM-Ziele bleibt gedämpft (0,80-1,35).
+"""
 from datetime import date, datetime, timedelta
 import calendar
-
 import numpy as np
 import pandas as pd
-
 from logic.kalender import austria_holidays
 from logic.helpers import _safe_int
+
+# Mindest-km pro Teilstrecke zwischen zwei Orten im FALLBACK-Pfad
+# (verhindert 0-km-Fahrten durch gleiche Radial-Werte)
+MIN_LEG_KM = 8
+# Grenzen fuer die Monats-Skalierung (schuetzt die echten Distanzen)
+SCALE_MIN = 0.80
+SCALE_MAX = 1.35
 
 
 def _time_str(dt):
@@ -30,6 +48,82 @@ def _tour_zeiten(rng, t, ganztags=True):
     abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(minutes=abf_min)
     ank_dt = abf_dt + timedelta(minutes=dauer)
     return _time_str(abf_dt), _time_str(ank_dt), dauer
+
+
+def _norm_ort(name):
+    """Ortsname normalisieren (getrimmt, kleingeschrieben)."""
+    return str(name).strip().lower()
+
+
+def _matrix_km(matrix, ort_a, ort_b):
+    """Echte Fahrstrecke aus der Distanz-Matrix oder None.
+    Schluessel sind immer sortiert: (kleiner_key, groesser_key)."""
+    a, b = _norm_ort(ort_a), _norm_ort(ort_b)
+    if not a or not b or a == b:
+        return None
+    key = (a, b) if a <= b else (b, a)
+    v = (matrix or {}).get(key)
+    if v is not None:
+        try:
+            v = int(v)
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _baue_distanz_map(distanzen, wohnort_clean, dienstort_clean, entfernung):
+    """Lookup {ort_lower: km_einfach}. Wohnort = 0, Dienstort faellt auf die
+    User-Einstellung 'Entfernung Wohnung-Arbeitsplatz' zurueck, falls nicht
+    in der Distanz-Pflege vorhanden."""
+    m = {}
+    for k, v in (distanzen or {}).items():
+        try:
+            m[_norm_ort(k)] = max(0, int(v))
+        except (TypeError, ValueError):
+            continue
+    m[_norm_ort(wohnort_clean)] = 0
+    if _norm_ort(dienstort_clean) not in m:
+        m[_norm_ort(dienstort_clean)] = max(0, _safe_int(entfernung, 25))
+    return m
+
+
+def _leg_km(dist_map, matrix, ort_a, ort_b, rng):
+    """km fuer eine Teilstrecke A -> B (Distanz-Logik v3):
+    1. Echte Fahrstrecke aus der Online-Distanz-Matrix (bevorzugt).
+    2. Fallback: Differenz der km-einfach-Werte (min. MIN_LEG_KM).
+       Beispiel: Wohnort Oberhofen, Zell am Moos 8 km, Eugendorf 30 km
+       -> Zell am Moos - Eugendorf = |8 - 30| = 22 km.
+    3. Ort ohne gepflegte Distanz: Zufallswert 15-35 wie bisher."""
+    km = _matrix_km(matrix, ort_a, ort_b)
+    if km is not None:
+        return km
+    da = dist_map.get(_norm_ort(ort_a))
+    db = dist_map.get(_norm_ort(ort_b))
+    if da is None or db is None:
+        return int(rng.integers(15, 35))
+    return max(abs(int(da) - int(db)), MIN_LEG_KM)
+
+
+def _tour_km_d(dist_map, matrix, wohnort_clean, stop_orte, rng):
+    """Gesamt-km_d einer Tour: Wohnort -> Stopps -> Wohnort."""
+    total = 0
+    prev = wohnort_clean
+    for ort in stop_orte:
+        total += _leg_km(dist_map, matrix, prev, ort, rng)
+        prev = ort
+    total += _leg_km(dist_map, matrix, prev, wohnort_clean, rng)
+    return total
+
+
+def _arbeitsweg_km(matrix, dist_map, wohnort_clean, dienstort_clean, entfernung):
+    """Realer Arbeitsweg Wohnort -> Dienstort: zuerst Matrix (Online-Karte),
+    sonst User-Einstellung 'Entfernung'."""
+    km = _matrix_km(matrix, wohnort_clean, dienstort_clean)
+    if km is not None:
+        return km
+    return max(1, _safe_int(entfernung, 25))
 
 
 def urlaubs_tage(jahr, anzahl_wochen, verteilung, start_woche_1: date) -> set:
@@ -60,6 +154,17 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
     dienstort = str(user_info.get('dienstort', 'Straßwalchen'))
     wohnort_clean = wohnort.split(',')[-1].strip() if ',' in wohnort else wohnort
     dienstort_clean = dienstort.split(',')[-1].strip() if ',' in dienstort else dienstort
+
+    # Distanz-Logik v3: Distanz-Matrix (Online-Karte) + km-einfach als Fallback
+    distanzen = params.get('distanzen', {}) or {}
+    matrix = params.get('distanz_matrix', {}) or {}
+    matrix_orte = set()  # alle Orte, die in der Matrix vorkommen
+    for _a, _b in matrix:
+        matrix_orte.add(_a)
+        matrix_orte.add(_b)
+    dist_map = _baue_distanz_map(distanzen, wohnort_clean, dienstort_clean,
+                                 user_info.get('entfernung', 25))
+    fehlende = set()  # Orte ohne gepflegte Distanz (fuer den UI-Hinweis)
 
     fahrzeug_optionen = {}
     for _, row in fahrzeuge_df.iterrows():
@@ -92,7 +197,6 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                 continue
             if v and b and v not in ('none', 'nan') and b not in ('none', 'nan') and fid is not None:
                 _liste.append((v, b, int(fid)))
-
     deckt = any(int(v[:4]) <= jahr <= int(b[:4]) for v, b, _ in _liste)
     if not deckt:
         raise ValueError(f"Kein Zeitraum deckt das Jahr {jahr} ab! "
@@ -113,6 +217,7 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
     haupt_anteil = params.get('hauptfahrzeug_anteil', 70) / 100.0
     prob_feiertag_urlaub = params.get('prob_feiertag_urlaub', 5) / 100.0
     prob_werktag = params.get('prob_werktag', 75)
+
     kw = keywords_df if keywords_df is not None and not keywords_df.empty else \
         pd.DataFrame([{"Ort": "Büro", "Zweck": "Büro"}])
 
@@ -141,6 +246,7 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                     if int(bid) == fahrzeug_id:
                         fahrzeug_name = bname
                         break
+
             if t.weekday() == 0:
                 special_trip_done_this_week = False
             is_saturday = t.weekday() == 5
@@ -152,8 +258,15 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                 if rng.random() < prob_feiertag_urlaub:
                     num_stops = int(rng.integers(1, 3))
                     sel = kw.sample(min(num_stops, len(kw)))
-                    stops = [f"{r['Ort']} ({r['Zweck']})" for _, r in sel.iterrows()]
-                    km_d = int(rng.integers(15, 25)) + sum(int(rng.integers(10, 25)) for _ in range(num_stops))
+                    stop_orte = []; stops = []
+                    for _, r in sel.iterrows():
+                        o = str(r['Ort']).strip()
+                        stop_orte.append(o)
+                        stops.append(f"{o} ({r['Zweck']})")
+                        if (_norm_ort(o) not in dist_map
+                                and _norm_ort(o) not in matrix_orte):
+                            fehlende.add(o)
+                    km_d = _tour_km_d(dist_map, matrix, wohnort_clean, stop_orte, rng)
                     route = ("Feiertag: " if is_holiday else "Urlaub: ") + " - ".join([wohnort_clean] + stops + [wohnort_clean])
                     abf, ank, dauer = _tour_zeiten(rng, t, ganztags=False)
                 else:
@@ -178,14 +291,24 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                     abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(hours=start_hour)
                     ank_dt = abf_dt + timedelta(minutes=fahrzeit)
                     abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(fahrzeit)
+
             elif is_saturday:
                 if rng.random() < 0.4:
-                    km_d = int(rng.integers(25, 55)); km_p = 0
+                    km_p = 0
                     num_stops = int(rng.integers(1, 2))
                     sel = kw.sample(min(num_stops, len(kw)))
-                    stops = [f"{r['Ort']} ({r['Zweck']})" for _, r in sel.iterrows()]
+                    stop_orte = []; stops = []
+                    for _, r in sel.iterrows():
+                        o = str(r['Ort']).strip()
+                        stop_orte.append(o)
+                        stops.append(f"{o} ({r['Zweck']})")
+                        if (_norm_ort(o) not in dist_map
+                                and _norm_ort(o) not in matrix_orte):
+                            fehlende.add(o)
+                    km_d = _tour_km_d(dist_map, matrix, wohnort_clean, stop_orte, rng)
                     route = " - ".join([wohnort_clean] + stops + [wohnort_clean])
                     abf, ank, dauer = _tour_zeiten(rng, t, ganztags=False)
+
             elif is_sunday:
                 km_p = int(rng.integers(*privat_km_ranges.get(fahrzeug_id, (5, 21)))) \
                     if fahrzeug_id in privat_km_ranges else int(rng.integers(5, 21))
@@ -195,9 +318,12 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                 abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(hours=start_hour)
                 ank_dt = abf_dt + timedelta(minutes=fahrzeit)
                 abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(fahrzeit)
+
             else:
+                # ===== WERKTAG: dienstlich_quote des gewaehlten Fahrzeugs =====
                 fz_quote = dienstlich_quotes.get(fahrzeug_id, 90) / 100.0
                 is_dienstlich = rng.random() < fz_quote
+
                 if not is_dienstlich:
                     km_d = 0
                     km_p = int(rng.integers(*privat_km_ranges.get(fahrzeug_id, (5, 21)))) \
@@ -209,30 +335,50 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                     abf_dt = datetime.combine(t.date(), datetime.min.time()) + timedelta(minutes=abf_min)
                     ank_dt = abf_dt + timedelta(minutes=dauer_min)
                     abf, ank, dauer = _time_str(abf_dt), _time_str(ank_dt), _dauer_str(dauer_min)
+
                 else:
                     current_week = t.isocalendar()[1]
                     target_day = 0 if current_week % 2 == 1 else 1
+
                     if t.weekday() == target_day and not special_trip_done_this_week:
+                        # 2-woechentliche Sonderfahrt: Wohnort - Dienstort (Büro) - Stopps - Wohnort
                         special_trip_done_this_week = True
-                        km_p = _safe_int(user_info.get('entfernung'), 25)
+                        km_p = _arbeitsweg_km(matrix, dist_map, wohnort_clean,
+                                              dienstort_clean,
+                                              user_info.get('entfernung', 25))
                         parts = [wohnort_clean, f"{dienstort_clean} (Büro)"]
                         num_stops = int(rng.integers(1, 4))
                         sel = kw.sample(min(num_stops, len(kw)))
+                        stop_orte = []
                         for _, r in sel.iterrows():
-                            parts.append(f"{r['Ort']} ({r['Zweck']})")
+                            o = str(r['Ort']).strip()
+                            stop_orte.append(o)
+                            parts.append(f"{o} ({r['Zweck']})")
+                            if (_norm_ort(o) not in dist_map
+                                    and _norm_ort(o) not in matrix_orte):
+                                fehlende.add(o)
                         parts.append(wohnort_clean)
                         route = " - ".join(parts)
-                        km_d = int(km_p) + sum(int(rng.integers(15, 35)) for _ in range(num_stops))
+                        km_d = _tour_km_d(dist_map, matrix, wohnort_clean,
+                                          [dienstort_clean] + stop_orte, rng)
                         abf, ank, dauer = _tour_zeiten(rng, t, ganztags=True)
+
                     else:
                         if prob_werktag >= 90: num_stops = int(rng.integers(1, 3))
                         elif prob_werktag >= 70: num_stops = int(rng.integers(1, 4))
                         elif prob_werktag >= 50: num_stops = int(rng.integers(2, 4))
                         else: num_stops = int(rng.integers(2, 5))
                         sel = kw.sample(min(num_stops, len(kw)))
-                        stops = [f"{r['Ort']} ({r['Zweck']})" for _, r in sel.iterrows()]
+                        stop_orte = []; stops = []
+                        for _, r in sel.iterrows():
+                            o = str(r['Ort']).strip()
+                            stop_orte.append(o)
+                            stops.append(f"{o} ({r['Zweck']})")
+                            if (_norm_ort(o) not in dist_map
+                                    and _norm_ort(o) not in matrix_orte):
+                                fehlende.add(o)
                         route = " - ".join([wohnort_clean] + stops + [wohnort_clean])
-                        km_d = sum(int(rng.integers(15, 35)) for _ in range(num_stops)); km_p = 0
+                        km_d = _tour_km_d(dist_map, matrix, wohnort_clean, stop_orte, rng); km_p = 0
                         abf, ank, dauer = _tour_zeiten(rng, t, ganztags=True)
 
             abfahrt_km = current_km.get(fahrzeug_id, 0) if fahrzeug_id is not None else 0
@@ -244,6 +390,8 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
 
         df = pd.DataFrame(out).sort_values(["datum"]).reset_index(drop=True)
 
+        # KM-Skalierung auf Monatsziel - gedämpft (0,80-1,35), damit echte
+        # Distanzen nicht plattgerechnet werden (frueher: 25 km -> 8 km moeglich)
         target_min = params.get('target_km_min', 1650)
         target_max = params.get('target_km_max', 2000)
         if not df.empty and target_max > 0:
@@ -253,7 +401,7 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                 wf = np.clip(month_workday_counts.get(monat_key, 21) / avg_workdays if avg_workdays > 0 else 1.0, 0.70, 1.20)
                 zf = rng.uniform(0.88, 1.12)
                 mt = np.clip(base * wf * zf, target_min * 0.55, target_max * 1.25)
-                sf = mt / cur
+                sf = float(np.clip(mt / cur, SCALE_MIN, SCALE_MAX))
                 df["km_d"] = df.apply(lambda r: int(r["km_d"] * sf) if r["km_d"] > 0 else 0, axis=1)
                 msk = {fz: km for fz, km in current_km.items()}
                 rows = []
@@ -270,4 +418,5 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
 
         generated[(jahr, monat_key)] = {"data": df,
                                         "end_km": max(current_km.values()) if current_km else 0}
-    return generated, current_km
+
+    return generated, current_km, sorted(fehlende)
