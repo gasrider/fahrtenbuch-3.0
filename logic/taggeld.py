@@ -1,9 +1,14 @@
-"""Taggeld-Berechnung (linear mit Deckel)."""
+"""Taggeld-Berechnung: Nur bei dienstlicher Auswaertstaetigkeit (km_d > 0).
+Privatfahrten, Sonntage, Feiertage und reine Arbeitswege bekommen kein Taggeld."""
 from logic.constants import DEFAULT_TAGGELD_PARAMS
-from logic.helpers import _safe_float
+from logic.helpers import _safe_float, _safe_int
 
 
-def berechne_taggeld_betrag(dauer_minuten, params=None) -> float:
+def berechne_taggeld_betrag(dauer_minuten, params=None, km_dienstlich=None):
+    """Kernfunktion: Taggeld als float (auf 2 Stellen gerundet).
+    Wird km_dienstlich uebergeben und ist 0 -> 0.00 (keine Auswaertstaetigkeit)."""
+    if km_dienstlich is not None and _safe_int(km_dienstlich) <= 0:
+        return 0.0
     if params is None:
         params = DEFAULT_TAGGELD_PARAMS
     min_st = params.get('min_stunden', 5)
@@ -20,7 +25,13 @@ def berechne_taggeld_betrag(dauer_minuten, params=None) -> float:
     return round(min(basis + (stunden - min_st) * stufung, max_betrag), 2)
 
 
+def taggeld_fuer_fahrt(dauer_minuten, km_dienstlich=0, params=None):
+    """Convenience fuer Einzelfahrten: Nur km_d > 0 erzeugt Taggeld."""
+    return berechne_taggeld_betrag(dauer_minuten, params, km_dienstlich=km_dienstlich)
+
+
 def berechne_taggeld(dauer_minuten, params=None) -> str:
+    """Anzeige-Variante ohne km-Pruefung (Abwaertskompatibilitaet)."""
     return f"{berechne_taggeld_betrag(dauer_minuten, params):.2f}".replace('.', ',')
 
 
