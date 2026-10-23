@@ -29,4 +29,4 @@ jobs:
       - name: App warm halten
         run: |
           curl -s -o /dev/null -w "App-Status: %{http_code}\n" \
-            "https://fahrtenbuch-30-ean6qnkogye5t6fabkfwj.streamlit.app/" || true
+            "https://fahrtenbuch-30-ean6qnkogye5t6fabkfwfj.streamlit.app/" || true
