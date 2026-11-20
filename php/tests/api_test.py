@@ -78,6 +78,7 @@ def main():
     base = f"http://127.0.0.1:{PORT}/fahrtenbuch/"
     try:
         run(base, app, supa.server_address[1])
+        run_check(base)
     finally:
         srv.terminate(); supa.shutdown()
         shutil.rmtree(work, ignore_errors=True)
@@ -285,6 +286,25 @@ def run(base, app, supa_port):
     check(i["hu"][0]["angewendet_am"] is not None, "HU als angewendet markiert")
     y = api(base, "year_get", {"jahr": 2025})
     check(sum(len(v) for v in y["monate"].values()) == 1200, "1.200 Fahrten (mehrere Seiten) übernommen")
+
+
+
+def run_check(base):
+    print("Systemprüfung")
+    TOKEN["t"] = api(base, "login", {"username": "christian mayerhofer", "password": "geheim123"}).get("token", "")
+    r = api(base, "admin_check")
+    for a in r.get("abschnitte", []):
+        print("    == " + a["titel"])
+        for i in a["items"]:
+            print("      " + {"ok": "✓", "warn": "!", "err": "✕", "info": "·"}[i["s"]] + " " + i["t"][:200])
+    txt = json.dumps(r, ensure_ascii=False)
+    check("doppelte, völlig gleiche Fahrten" in txt, "Prüfung erkennt doppelte Fahrten aus dem Test-Umzug")
+    check("Kilometerkette" in txt, "Prüfung der Kilometerkette läuft")
+    check("PDF-Erzeugung: Monat" in txt, "PDF-Prüfung läuft")
+    api(base, "admin_rechain", {"username": "neuhofer dominik", "jahr": 2025})
+    r2 = api(base, "admin_check")
+    dom = [a for a in r2["abschnitte"] if "neuhofer" in a["titel"]][0]
+    check(any(i["s"] == "ok" and "2025 Kilometerkette lückenlos" in i["t"] for i in dom["items"]), "Kette nach „neu berechnen“ lückenlos")
 
 
 if __name__ == "__main__":

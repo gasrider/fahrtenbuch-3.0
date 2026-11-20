@@ -643,6 +643,25 @@ async function viewAdmin(main) {
     h('div.row', null, h('button.btn', { type: 'button', onclick: () => run(async () => { const cfg = {}; for (const [k, i] of Object.entries(F)) cfg[k] = i.value; await api('admin_config_save', { config: cfg }); toast('Einstellungen gespeichert.'); renderApp(); }) }, 'Speichern'),
       h('span.right'), to, h('button.btn.sec', { type: 'button', onclick: () => run(async () => { await api('admin_mail_test', { to: to.value }); toast('Test-E-Mail gesendet – auch im Spam-Ordner nachsehen.'); }, 'Sende Test-E-Mail …') }, 'Test-E-Mail senden'))));
 
+  // Systemprüfung
+  const repOut = h('div', { style: 'display:grid;gap:8px' });
+  const ICON = { ok: '✓', warn: '!', err: '✕', info: '·' }, CLS = { ok: 'ok', warn: 'warn', err: 'err', info: 'info' };
+  const rcU = sel(u.users.map(x => x.username), S.user.username), rcJ = h('input', { type: 'number', value: S.jahr, inputmode: 'numeric' });
+  main.append(h('div.card', null, h('h2', null, 'Systemprüfung'),
+    h('p.hint', null, 'Prüft Server, Online-Karte, E-Mail und für jeden Benutzer alle Daten nach dem Umzug: Kilometerkette und Anker je Jahr, Jahresübergänge, doppelte Fahrten, Distanzen, Plausibilität, Taggeld, HU, PDF. Ändert nichts. Den Bericht kannst du kopieren und Claude schicken.'),
+    h('div.row', null, h('button.btn', { type: 'button', onclick: () => run(async () => {
+      const r = await api('admin_check'); let txt = 'Systemprüfung Fahrtenbuch ' + r.zeit + '\n';
+      repOut.replaceChildren(...r.abschnitte.map(a => { txt += '\n== ' + a.titel + ' ==\n'; a.items.forEach(i => txt += ICON[i.s] + ' ' + i.t.replace(/\*\*/g, '') + '\n');
+        return h('div', { style: 'display:grid;gap:4px' }, h('h3', null, a.titel), a.items.map(i => h('div.msg.' + CLS[i.s], { html: ICON[i.s] + ' ' + md(i.t) }))); }));
+      const cnt = s => r.abschnitte.reduce((n, a) => n + a.items.filter(i => i.s === s).length, 0);
+      repOut.prepend(msgBox(cnt('err') ? 'err' : (cnt('warn') ? 'warn' : 'ok'), `${cnt('err')} Fehler · ${cnt('warn')} Hinweise · ${cnt('ok')} in Ordnung`),
+        h('div.row', null, h('button.btn.sec', { type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(txt); toast('Bericht kopiert – jetzt in den Chat einfügen.'); } catch (e) { const t = h('textarea', null); t.value = txt; repOut.prepend(t); t.select(); toast('Bitte den markierten Text kopieren.'); } } }, 'Bericht kopieren')));
+    }, 'Prüfe alle Funktionen … (ca. 10–30 Sekunden)') }, 'Systemprüfung starten')), repOut,
+    h('details', null, h('summary', null, 'Kilometerkette eines Jahres neu berechnen'), h('div', { style: 'display:grid;gap:10px;margin-top:10px' },
+      h('p.hint', null, 'Nur wenn die Prüfung Sprünge in der Kette meldet: berechnet „KM Abfahrt“ ab dem Jahres-Anker neu (auch Folgejahre). Gefahrene Kilometer bleiben unverändert.'),
+      h('div.grid2', null, field('Benutzer', rcU), field('Jahr', rcJ)),
+      h('div.row', null, dangerBtn('Kette neu berechnen', () => run(async () => { await api('admin_rechain', { username: rcU.value, jahr: +rcJ.value }); S.y = null; toast('Kette neu berechnet. Systemprüfung erneut starten.'); })))))));
+
   // Supabase-Umzug
   const su = h('input', { placeholder: 'https://slwcirzmjuchdqzwckky.supabase.co', value: 'https://slwcirzmjuchdqzwckky.supabase.co' }), sk = h('input', { type: 'password', placeholder: 'service_role-Schlüssel', autocomplete: 'off' });
   const log = h('div.log'); const bar = h('div.bar', null, h('div'));

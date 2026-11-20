@@ -419,6 +419,18 @@ case 'admin_mail_test': {
   catch (Throwable $e) { fail(400, $e->getMessage()); }
   out(['ok' => true]);
 }
+case 'admin_check': {
+  require_admin();
+  require __DIR__ . '/server/check.php';
+  out(['abschnitte' => systempruefung(), 'zeit' => (new DateTimeImmutable('now', new DateTimeZone('Europe/Vienna')))->format('d.m.Y H:i')]);
+}
+case 'admin_rechain': {
+  // Kilometerkette eines Jahres ab dem gesperrten Anker neu aufbauen (nur abfahrt_km ändert sich, km bleiben)
+  require_admin(); $user = norm_username(in_str('username')); $jahr = in_int('jahr');
+  if (!year_load($user, $jahr)) fail(400, "Keine Fahrten für $user im Jahr $jahr.");
+  [, $end] = year_commit($user, $jahr, null, fahrzeuge_load($user));
+  out(['ok' => true, 'endkm' => $end]);
+}
 case 'admin_supabase': {
   $me = require_admin();
   require __DIR__ . '/server/migrate.php';

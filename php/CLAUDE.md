@@ -17,6 +17,7 @@ app/                       ← wird 1:1 in den Ordner /fahrtenbuch gespielt
   server/import.php        ← .xlsx (ZipArchive+SimpleXML) / .csv lesen, Zuordnung wie excel_import.py
   server/routing.php       ← Nominatim + OSRM (Online-Distanzen), schrittweise von der App aufgerufen
   server/migrate.php       ← einmaliger Umzug aus Supabase (REST, tabellenweise)
+  server/check.php         ← Systemprüfung (Admin): Server, Kette, Anker, Doppelte, Distanzen, HU, PDF – ändert nichts
   server/config.php        ← Vorlage; echte Datei schreibt der Installer, NIE ausliefern
 build/make_installer.py    ← packt app/ in dist/installieren.php
 dist/installieren.php      ← Auslieferung: per WebFTP in /fahrtenbuch hochladen und im Browser öffnen
