@@ -1,0 +1,16 @@
+# Fahrtenbuch
+Options -Indexes
+DirectoryIndex index.html
+AddType application/manifest+json .webmanifest
+AddDefaultCharset utf-8
+<FilesMatch "\.(md|sql|log|bak)$">
+  Require all denied
+</FilesMatch>
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "same-origin"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  <FilesMatch "\.(html|js|webmanifest)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>
