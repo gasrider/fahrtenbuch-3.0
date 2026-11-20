@@ -147,6 +147,11 @@ function geo_save(string $u, string $ort, ?array $g): void {
 /* ---------- Fahrten (Jahr) ---------- */
 function fahrt_norm(array $r): array {
   $fz = $r['fahrzeug_id'] ?? null;
+  // Dauer: alte Daten hatten teils Minuten als Zahl („795“) – in HH:MM umrechnen; fehlt sie, aus Abfahrt/Ankunft berechnen
+  $d = trim((string) ($r['dauer'] ?? ''));
+  if (preg_match('/^\d+$/', $d)) $r['dauer'] = hhmm((int) $d);
+  $abf = zeit_norm($r['abf'] ?? ''); $ank = zeit_norm($r['ank'] ?? '');
+  if (zeit_norm($r['dauer'] ?? '') === '00:00' && $abf !== $ank && ($abf !== '00:00' || $ank !== '00:00')) $r['dauer'] = dauer_string($abf, $ank);
   return ['datum' => (string) parse_date_iso($r['datum'] ?? ''), 'fahrzeug_id' => ($fz === null || $fz === '') ? null : (int) $fz,
     'fahrzeug' => mb_substr(trim((string) ($r['fahrzeug'] ?? '')), 0, 190), 'route' => trim((string) ($r['route'] ?? '')),
     'km_d' => max(0, safe_int($r['km_d'] ?? 0, 0)), 'km_p' => max(0, safe_int($r['km_p'] ?? 0, 0)),
@@ -256,6 +261,9 @@ function stopps_liste($v): array {
 }
 function hu_load(string $u): array {
   $rows = q('SELECT id, fahrzeug_id, datum, km_at_hu, werkstattort, stopps_vor_hu, stopps_nach_hu, angewendet_am FROM fb_hu WHERE username = ? ORDER BY datum, id', [$u])->fetchAll();
-  foreach ($rows as &$r) { $r['id'] = (int) $r['id']; $r['fahrzeug_id'] = (int) $r['fahrzeug_id']; $r['km_at_hu'] = (int) $r['km_at_hu']; $r['stopps_vor_hu'] = (string) $r['stopps_vor_hu']; $r['stopps_nach_hu'] = (string) $r['stopps_nach_hu']; }
+  foreach ($rows as &$r) {
+    $r['id'] = (int) $r['id']; $r['fahrzeug_id'] = (int) $r['fahrzeug_id']; $r['km_at_hu'] = (int) $r['km_at_hu']; $r['stopps_vor_hu'] = (string) $r['stopps_vor_hu']; $r['stopps_nach_hu'] = (string) $r['stopps_nach_hu'];
+    $r['hu_fahrt'] = (bool) q("SELECT COUNT(*) FROM fb_fahrten WHERE username = ? AND datum = ? AND fahrzeug_id = ? AND route LIKE '%(HU)%'", [$u, $r['datum'], $r['fahrzeug_id']])->fetchColumn();
+  }
   return $rows;
 }

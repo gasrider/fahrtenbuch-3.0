@@ -493,7 +493,8 @@ function wende_hu_an(array $year, array $anchor, array $names, array $corr, stri
   foreach ($distanzen as $o => $km) $dist[norm_ort($o)] = max(0, (int) $km);
   if ($home !== '') $dist[norm_ort($home)] = 0;
 
-  foreach ($corr as $c) {
+  $ok = [];
+  foreach ($corr as $ci => $c) {
     $fz = (int) $c['fahrzeug_id']; $hu = (string) $c['datum']; $kmHu = (int) $c['km_at_hu'];
     $werk = trim((string) $c['werkstattort']); $vor = $c['stopps_vor']; $nach = $c['stopps_nach'];
     $fzName = $names[$fz] ?? "FZ $fz";
@@ -505,7 +506,8 @@ function wende_hu_an(array $year, array $anchor, array $names, array $corr, stri
       $hat = true; $s = (int) $r['km_d'] + (int) $r['km_p'];
       if ($r['datum'] < $hu) $sumVor += $s; elseif ($r['datum'] > $hu) $sumNach += $s; else $sumTag += $s;
     }
-    if (!$hat) { $msg[] = '- Keine Fahrten dieses Fahrzeugs gefunden – übersprungen.'; continue; }
+    if (!$hat) { $msg[] = "- NICHT angewendet: $fzName hat im Jahr " . substr($hu, 0, 4) . ' keine einzige Fahrt. Zuerst prüfen, ob der Nutzungszeitraum stimmt, und die betroffenen Monate neu generieren.'; continue; }
+    if ($kmHu <= $start) { $msg[] = '- NICHT angewendet: HU-Stand ' . fmt_int($kmHu) . ' km liegt unter dem Jahres-Startwert ' . fmt_int($start) . ' km. Bitte HU-Kilometerstand oder Start-KM prüfen.'; continue; }
     $start = (int) ($anchor[$fz] ?? 0);
     $ende = $start + $sumVor + $sumTag + $sumNach;
 
@@ -555,9 +557,10 @@ function wende_hu_an(array $year, array $anchor, array $names, array $corr, stri
     }
     unset($rows);
     $msg[] = $angelegt ? '- HU-Fahrt am ' . fmt_datum($hu) . ' angelegt.' : '- WARNUNG: HU-Tag liegt außerhalb der gespeicherten Monate!';
+    if ($angelegt) $ok[] = $ci;
   }
   $end = kette_neu($year, $anchor);
-  return [$year, $end, $msg];
+  return [$year, $end, $msg, $ok];
 }
 
 /* ===================== Privat-KM verteilen ===================== */

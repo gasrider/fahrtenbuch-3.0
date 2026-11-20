@@ -545,7 +545,7 @@ function viewHU(main) {
     { k: 'fahrzeug_id', label: 'Fahrzeug', type: 'select', num: true, opts: d.fahrzeuge.map(f => [f.id, f.bezeichnung]), w: '140px' }, { k: 'datum', label: 'Datum der HU', type: 'date', w: '140px' },
     { k: 'km_at_hu', label: 'Kilometerstand bei HU', type: 'int', w: '120px', min: 0 }, { k: 'werkstattort', label: 'Werkstattort', type: 'text', list: 'huorte', w: '150px' },
     { k: 'stopps_vor_hu', label: 'Stopps vor HU', type: 'text', ph: 'Ort, Ort', w: '170px' }, { k: 'stopps_nach_hu', label: 'Stopps nach HU', type: 'text', ph: 'Ort, Ort', w: '170px' },
-    { k: 'angewendet_am', label: 'Status', type: 'ro', fmt: r => r.angewendet_am ? h('span.pill.ok', null, 'angewendet') : h('span.pill', null, 'offen') },
+    { k: 'angewendet_am', label: 'Status', type: 'ro', fmt: r => r.hu_fahrt ? h('span.pill.ok', null, 'HU-Fahrt vorhanden') : h('span.pill', null, 'offen') },
   ], d.hu);
   main.append(h('div.card', null, h('h2', null, 'HU-Einträge'),
     h('p.hint', null, 'Stopps: Orte mit Komma getrennt. Für Werkstatt und Stopps sollten im Tab „Fahrzeuge & Orte“ Distanzen vorhanden sein – sonst werden generische Werte verwendet. Nur Speichern ändert keine Fahrten.'),
@@ -553,7 +553,7 @@ function viewHU(main) {
     h('div.row', null, h('button.btn.sec', { type: 'button', onclick: () => G.addRow({ fahrzeug_id: d.fahrzeuge[0].id, datum: '', km_at_hu: 0, werkstattort: '', stopps_vor_hu: '', stopps_nach_hu: '', angewendet_am: null }) }, '+ HU-Eintrag'),
       h('span.right'), h('button.btn', { type: 'button', onclick: () => run(async () => { const r = await api('hu_save', { rows: G.rows() }); d.hu = r.hu; toast(r.hu.length + ' HU-Einträge gespeichert.'); renderApp(); }) }, 'HU-Einträge speichern'))));
   const force = h('input', { type: 'checkbox' }); const out = h('div', { style: 'display:grid;gap:8px' });
-  const offen = d.hu.filter(x => !x.angewendet_am).length;
+  const offen = d.hu.filter(x => !x.hu_fahrt).length;
   main.append(h('div.card', null, h('h2', null, 'Fahrten an HU anpassen'),
     msgBox('warn', 'Pro HU-Eintrag nur EINMAL! Kilometer vor dem HU-Datum werden so skaliert, dass der Tacho bei Ankunft in der Werkstatt genau den HU-Stand zeigt; danach kompensierend (Jahressumme bleibt). Weg zur Werkstatt = privat, Kundenstopps = dienstlich. Bereits angewendete Einträge werden übersprungen.'),
     h('p.hint', null, `${offen} offene(r) Eintrag/Einträge. Nach einem Neu-Generieren des Monats wird der Eintrag automatisch wieder „offen“.`),

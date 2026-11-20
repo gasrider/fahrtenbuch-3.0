@@ -255,7 +255,8 @@ case 'hu_save': {
 case 'hu_apply': {
   $u = require_user(); $n = $u['username']; $force = !empty($in['force']);
   $all = hu_load($n);
-  $todo = array_values(array_filter($all, function ($h) use ($force) { return $force || $h['angewendet_am'] === null; }));
+  // „angewendet“ zählt nur, wenn die HU-Fahrt auch wirklich in den Fahrten steht (Umzug hat pauschal markiert)
+  $todo = array_values(array_filter($all, function ($h) use ($force) { return $force || $h['angewendet_am'] === null || !$h['hu_fahrt']; }));
   if (!$todo) fail(400, $all ? 'Alle HU-Einträge wurden bereits angewendet. Nochmal anwenden würde die Kilometer doppelt verändern.' : 'Keine HU-Einträge vorhanden.');
   $fz = fahrzeuge_load($n); $names = names_by_id($fz); $s = settings_load($n);
   $byYear = [];
@@ -268,10 +269,11 @@ case 'hu_apply': {
     $corr = array_map(function ($h) { return ['fahrzeug_id' => $h['fahrzeug_id'], 'datum' => $h['datum'], 'km_at_hu' => $h['km_at_hu'], 'werkstattort' => $h['werkstattort'],
       'stopps_vor' => stopps_liste($h['stopps_vor_hu']), 'stopps_nach' => stopps_liste($h['stopps_nach_hu'])]; }, $list);
     $anchor = anchor_get_or_create($n, $jahr, $fz);
-    [$year, , $m] = wende_hu_an($year, $anchor, $names, $corr, (string) $s['wohnort'], distanzen_load($n), matrix_load($n));
+    [$year, , $m, $ok] = wende_hu_an($year, $anchor, $names, $corr, (string) $s['wohnort'], distanzen_load($n), matrix_load($n));
     $msg = array_merge($msg, $m);
+    if (!$ok) continue;
     [$year] = year_commit($n, $jahr, $year, $fz);
-    foreach ($list as $h) q('UPDATE fb_hu SET angewendet_am = UTC_TIMESTAMP() WHERE id = ?', [$h['id']]);
+    foreach ($ok as $i) q('UPDATE fb_hu SET angewendet_am = UTC_TIMESTAMP() WHERE id = ?', [$list[$i]['id']]);
     $last = $jahr;
   }
   out(['meldungen' => $msg, 'hu' => hu_load($n), 'jahr' => $last]);
@@ -304,7 +306,10 @@ case 'geo_start': {
   $home = ort_clean(trim((string) $s['wohnort'])); $dienst = ort_clean(trim((string) $s['dienstort']));
   if ($home === '') fail(400, 'Kein Wohnort in den Stammdaten hinterlegt – bitte zuerst im Tab „Stammdaten“ eintragen.');
   $list = []; $seen = [];
-  foreach (array_merge(array_column(orte_load($n), 'ort'), [$home, $dienst], array_map('strval', in_arr('zusatz'))) as $o) {
+  $kwOrte = [];
+  foreach (jahre_load($n) as $j) { $g = gen_settings_load($n, $j); foreach (keywords_aus_text((string) ($g['keyword_text'] ?? '')) as $k) $kwOrte[] = $k['ort']; }
+  foreach (hu_load($n) as $h) $kwOrte = array_merge($kwOrte, [$h['werkstattort']], stopps_liste($h['stopps_vor_hu']), stopps_liste($h['stopps_nach_hu']));
+  foreach (array_merge(array_column(orte_load($n), 'ort'), [$home, $dienst], $kwOrte, array_map('strval', in_arr('zusatz'))) as $o) {
     $o = trim($o); $k = norm_ort($o);
     if ($o === '' || isset($seen[$k])) continue;
     $seen[$k] = true; $list[] = $o;

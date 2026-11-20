@@ -59,6 +59,7 @@ function chk_user(string $u): array {
   foreach ($fz as $f) if ($f['privat_km_max'] <= $f['privat_km_min']) $add('info', "{$f['bezeichnung']}: Privat max ≤ min – es werden immer {$f['privat_km_min']} km verwendet");
   $zr = zeitraeume_load($u);
   $bad = array_filter($zr, function ($z) use ($ids) { return !in_array($z['fahrzeug_id'], $ids, true); });
+  if ($bad) $add('err', 'Zeiträume verweisen auf Fahrzeuge, die es nicht gibt (alte Excel-IDs) – im Reiter „Fahrzeuge & Orte“ jedem Zeitraum das richtige Fahrzeug zuweisen und speichern, sonst kann nicht generiert werden.');
   $add($bad ? 'err' : ($zr ? 'ok' : 'err'), $zr ? count($zr) . ' Zeiträume: ' . implode(' · ', array_map(function ($z) use ($names) { return ($names[$z['fahrzeug_id']] ?? 'UNBEKANNT ' . $z['fahrzeug_id']) . ' ' . fmt_datum($z['von']) . '–' . fmt_datum($z['bis']); }, $zr)) : 'Keine Zeiträume – Generator geht nicht');
 
   // Orte & Distanzen
@@ -135,7 +136,9 @@ function chk_user(string $u): array {
   foreach (hu_load($u) as $h) {
     $y = year_load($u, (int) substr($h['datum'], 0, 4)); $row = null;
     foreach ($y[(int) substr($h['datum'], 5, 2)] ?? [] as $r) if ($r['datum'] === $h['datum'] && $r['fahrzeug_id'] === $h['fahrzeug_id']) $row = $r;
-    $txt = 'HU ' . ($names[$h['fahrzeug_id']] ?? '?') . ' ' . fmt_datum($h['datum']) . ' (' . fmt_int($h['km_at_hu']) . ' km, ' . ($h['angewendet_am'] ? 'angewendet' : 'offen') . ')';
+    $txt = 'HU ' . ($names[$h['fahrzeug_id']] ?? '?') . ' ' . fmt_datum($h['datum']) . ' (' . fmt_int($h['km_at_hu']) . ' km, ' . ($h['hu_fahrt'] ? 'HU-Fahrt vorhanden' : 'offen') . ')';
+    $anc = anchor_get($u, (int) substr($h['datum'], 0, 4))[$h['fahrzeug_id']] ?? null;
+    if ($anc !== null && $h['km_at_hu'] <= $anc) $add('err', "$txt: HU-Stand liegt UNTER dem Jahres-Startwert " . fmt_int($anc) . ' km – HU-Kilometerstand oder Start-KM falsch');
     if (!$row) $add($h['angewendet_am'] ? 'warn' : 'info', "$txt: keine Fahrt an diesem Tag gespeichert");
     else {
       $ok = strpos($row['route'], '(HU)') !== false;
