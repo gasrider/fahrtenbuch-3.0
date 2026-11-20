@@ -306,6 +306,24 @@ def run_check(base):
     dom = [a for a in r2["abschnitte"] if "neuhofer" in a["titel"]][0]
     check(any(i["s"] == "ok" and "2025 Kilometerkette lückenlos" in i["t"] for i in dom["items"]), "Kette nach „neu berechnen“ lückenlos")
 
+    print("Analyse-Schlüssel")
+    k = api(base, "admin_analyse_key", {}).get("key", "")
+    admin_tok = TOKEN["t"]; TOKEN["t"] = ""
+    def keyreq(action, key):
+        req = urllib.request.Request(base + "api.php?action=" + action, data=b"{}", method="POST", headers={"Content-Type": "application/json", "X-Api-Key": key})
+        try:
+            with urllib.request.urlopen(req) as r: return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e: return e.code, {}
+    c, j = keyreq("analyse_export", k)
+    check(c == 200 and any(b["user"]["username"] == "neuhofer dominik" for b in j.get("benutzer", [])), "Export mit Analyse-Schlüssel")
+    check("pass_hash" not in json.dumps(j), "Export enthält keine Passwörter")
+    check(keyreq("admin_check", k)[0] == 200, "Systemprüfung mit Analyse-Schlüssel")
+    check(keyreq("admin_users", k)[0] == 401, "Schlüssel darf sonst nichts")
+    check(keyreq("analyse_export", "fbk_falsch")[0] == 401, "falscher Schlüssel abgelehnt")
+    TOKEN["t"] = admin_tok
+    api(base, "admin_analyse_key", {"sperren": True})
+    check(keyreq("analyse_export", k)[0] == 401, "gesperrter Schlüssel abgelehnt")
+
 
 if __name__ == "__main__":
     main()

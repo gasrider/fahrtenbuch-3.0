@@ -662,6 +662,16 @@ async function viewAdmin(main) {
       h('div.grid2', null, field('Benutzer', rcU), field('Jahr', rcJ)),
       h('div.row', null, dangerBtn('Kette neu berechnen', () => run(async () => { await api('admin_rechain', { username: rcU.value, jahr: +rcJ.value }); S.y = null; toast('Kette neu berechnet. Systemprüfung erneut starten.'); })))))));
 
+  // Analyse-Zugang für Claude
+  const akOut = h('div', { style: 'display:grid;gap:8px' });
+  main.append(h('div.card', null, h('h2', null, 'Analyse-Zugang für Claude (nur lesen)'),
+    h('p.hint', null, 'Erzeugt einen Schlüssel, mit dem Claude die Systemprüfung und alle Fahrtenbuch-Daten LESEN kann – nichts ändern, keine Passwörter. Gültig 14 Tage, jederzeit sperrbar. Den Schlüssel nur in das sichere Formular von Claude einfügen, nicht in den Chat.'),
+    cf.analyse_bis ? msgBox('info', 'Ein Analyse-Schlüssel ist aktiv bis ' + cf.analyse_bis + ' (UTC).') : msgBox('ok', 'Kein Analyse-Schlüssel aktiv.'),
+    h('div.row', null, h('button.btn', { type: 'button', onclick: () => run(async () => { const r = await api('admin_analyse_key', {});
+      const inp = h('input', { value: r.key, readonly: true }); akOut.replaceChildren(msgBox('warn', 'Schlüssel wird nur JETZT angezeigt. Kopieren und in Claudes sicheres Formular einfügen:'), inp,
+        h('div.row', null, h('button.btn.sec', { type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(r.key); toast('Schlüssel kopiert.'); } catch (e) { inp.select(); toast('Bitte markierten Text kopieren.'); } } }, 'Schlüssel kopieren'))); }) }, 'Schlüssel erzeugen (14 Tage)'),
+      cf.analyse_bis ? dangerBtn('Zugang sperren', () => run(async () => { await api('admin_analyse_key', { sperren: true }); toast('Analyse-Zugang gesperrt.'); renderApp(); })) : null), akOut));
+
   // Supabase-Umzug
   const su = h('input', { placeholder: 'https://slwcirzmjuchdqzwckky.supabase.co', value: 'https://slwcirzmjuchdqzwckky.supabase.co' }), sk = h('input', { type: 'password', placeholder: 'service_role-Schlüssel', autocomplete: 'off' });
   const log = h('div.log'); const bar = h('div.bar', null, h('div'));

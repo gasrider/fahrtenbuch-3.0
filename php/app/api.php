@@ -30,6 +30,15 @@ function year_payload(string $u, int $jahr, array $year): array {
 }
 function names_by_id(array $fz): array { $n = []; foreach ($fz as $f) $n[$f['id']] = $f['bezeichnung']; return $n; }
 
+// Analyse-Schlüssel (nur lesen): vom Admin erzeugt, Header X-Api-Key, nur für admin_check und analyse_export
+function analyse_key_ok(): bool {
+  $k = (string) ($_SERVER['HTTP_X_API_KEY'] ?? '');
+  $h = (string) setting('analyse_key_hash', ''); $bis = (string) setting('analyse_key_bis', '');
+  if ($k === '' || $h === '' || $bis === '' || $bis < gmdate('Y-m-d H:i:s')) return false;
+  return hash_equals($h, hash('sha256', $k));
+}
+function require_admin_or_key(): void { if (!analyse_key_ok()) require_admin(); }
+
 switch ($action) {
 
 /* ===================== Anmeldung ===================== */
@@ -402,6 +411,7 @@ case 'admin_config': {
   $keys = ['mail_mode', 'mail_from', 'mail_from_name', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'graph_tenant', 'graph_client', 'invite_code'];
   $c = [];
   foreach ($keys as $k) $c[$k] = (string) setting($k, '');
+  $c['analyse_bis'] = (setting('analyse_key_hash', '') !== '' && setting('analyse_key_bis', '') > gmdate('Y-m-d H:i:s')) ? (string) setting('analyse_key_bis') : '';
   $c['smtp_pass_set'] = setting('smtp_pass', '') !== ''; $c['graph_secret_set'] = setting('graph_secret', '') !== '';
   out(['config' => $c]);
 }
@@ -420,9 +430,29 @@ case 'admin_mail_test': {
   out(['ok' => true]);
 }
 case 'admin_check': {
-  require_admin();
+  require_admin_or_key();
   require __DIR__ . '/server/check.php';
   out(['abschnitte' => systempruefung(), 'zeit' => (new DateTimeImmutable('now', new DateTimeZone('Europe/Vienna')))->format('d.m.Y H:i')]);
+}
+case 'analyse_export': {
+  // Alle Daten aller Benutzer lesend (für die Analyse); Passwörter/Schlüssel sind NICHT enthalten
+  require_admin_or_key();
+  $out = [];
+  foreach (q('SELECT username, email, is_admin, force_pw_change, created_at FROM fb_users ORDER BY username')->fetchAll() as $usr) {
+    $n = $usr['username']; $jahre = jahre_load($n); $y = []; $a = []; $g = [];
+    foreach ($jahre as $j) { $y[$j] = year_load($n, $j); $g[$j] = gen_settings_load($n, $j); }
+    foreach (q('SELECT DISTINCT jahr FROM fb_jahres_start_km WHERE username = ?', [$n])->fetchAll(PDO::FETCH_COLUMN) as $j) $a[$j] = anchor_get($n, (int) $j);
+    $out[] = ['user' => $usr, 'settings' => settings_load($n), 'fahrzeuge' => fahrzeuge_load($n), 'zeitraeume' => zeitraeume_load($n), 'orte' => orte_load($n),
+      'matrix' => matrix_rows($n), 'anker' => $a, 'gen' => $g, 'hu' => hu_load($n), 'fahrten' => $y];
+  }
+  out(['benutzer' => $out, 'zeit' => gmdate('c')]);
+}
+case 'admin_analyse_key': {
+  require_admin();
+  if (!empty($in['sperren'])) { setting_save('analyse_key_hash', ''); setting_save('analyse_key_bis', ''); out(['ok' => true]); }
+  $key = 'fbk_' . bin2hex(random_bytes(24));
+  setting_save('analyse_key_hash', hash('sha256', $key)); setting_save('analyse_key_bis', gmdate('Y-m-d H:i:s', time() + 14 * 86400));
+  out(['key' => $key, 'bis' => setting('analyse_key_bis')]);
 }
 case 'admin_rechain': {
   // Kilometerkette eines Jahres ab dem gesperrten Anker neu aufbauen (nur abfahrt_km ändert sich, km bleiben)
