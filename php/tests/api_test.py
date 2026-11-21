@@ -229,6 +229,25 @@ def run(base, app, supa_port):
         check(hu[0]["km_p"] == 25 + 28, f"Weg zur Werkstatt + Heimweg privat ({hu[0]['km_p']})")
     api(base, "hu_apply", {}, 400)
 
+    print("HU: zweites Fahrzeug + Altlast buchstabenweise Stopps")
+    t6 = ids["VW T6.1"]
+    sep = [x for x in y["monate"]["9"] if x["fahrzeug_id"] == t6]
+    if sep:
+        d = sep[len(sep) // 2]
+        hu2 = d["abfahrt_km"] + 60
+        rows = [{"id": h["id"], **{k: h[k] for k in ("fahrzeug_id", "datum", "km_at_hu", "werkstattort", "stopps_vor_hu", "stopps_nach_hu")}} for h in api(base, "init")["hu"]]
+        rows.append({"fahrzeug_id": t6, "datum": d["datum"], "km_at_hu": hu2, "werkstattort": "Eugendorf", "stopps_vor_hu": ",".join("Zell am Moos"), "stopps_nach_hu": ""})
+        api(base, "hu_save", {"rows": rows})
+        r = api(base, "hu_apply", {})
+        txt = " ".join(r.get("meldungen", []))
+        check("NICHT angewendet" not in txt and "HU VW T6.1" in txt and "HU VW Polo" not in txt, "nur der offene T6.1-Eintrag wird angewendet, mit eigenem Startwert")
+        y2 = api(base, "year_get", {"jahr": 2025})
+        h2 = [x for x in y2["monate"]["9"] if x["datum"] == d["datum"] and x["fahrzeug_id"] == t6]
+        check(len(h2) == 1 and h2[0]["route"].startswith("Oberhofen am Irrsee - Zell am Moos - Eugendorf (HU)"), "Stopp „Zell am Moos“ aus Buchstaben-Altlast repariert")
+        check(h2 and h2[0]["abfahrt_km"] + 30 == hu2, "Tacho T6.1 bei Ankunft Werkstatt = HU-Stand")
+        check(h2 and h2[0]["km_d"] == 10, f"HU-Tag dienstl. km plausibel ({h2[0]['km_d'] if h2 else '-'})")
+        kette_ok(y2["monate"], anchor25, "2025 nach zweiter HU")
+
     print("PDF")
     pdf = api(base, "pdf", {"typ": "monat", "jahr": 2025, "monat": 6}, raw=True)
     check(pdf[:5] == b"%PDF-", "Monats-PDF erzeugt")

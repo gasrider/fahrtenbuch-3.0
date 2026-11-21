@@ -257,12 +257,21 @@ function gen_settings_save(string $u, int $jahr, array $s): void {
 }
 function stopps_liste($v): array {
   if (is_array($v)) $v = implode(',', $v);
-  return array_values(array_filter(array_map('trim', explode(',', (string) $v)), 'strlen'));
+  $v = (string) $v;
+  $teile = array_values(array_filter(array_map('trim', explode(',', $v)), 'strlen'));
+  // Altlast der Python-Version: Stopps wurden buchstabenweise gespeichert („S,t,r,a,ß,…,,,N,e,u,…“).
+  // Erkennung: fast alle Teile sind einzelne Zeichen → Orte waren durch „,,,“ getrennt, Buchstaben durch „,“.
+  if (count($teile) >= 3 && count(array_filter($teile, function ($t) { return mb_strlen($t) === 1; })) >= count($teile) * 0.8) {
+    $orte = [];
+    foreach (preg_split('/,\s*,\s*,/', $v) as $o) { $o = trim(str_replace(',', '', $o)); if ($o !== '') $orte[] = $o; }
+    return $orte;
+  }
+  return $teile;
 }
 function hu_load(string $u): array {
   $rows = q('SELECT id, fahrzeug_id, datum, km_at_hu, werkstattort, stopps_vor_hu, stopps_nach_hu, angewendet_am FROM fb_hu WHERE username = ? ORDER BY datum, id', [$u])->fetchAll();
   foreach ($rows as &$r) {
-    $r['id'] = (int) $r['id']; $r['fahrzeug_id'] = (int) $r['fahrzeug_id']; $r['km_at_hu'] = (int) $r['km_at_hu']; $r['stopps_vor_hu'] = (string) $r['stopps_vor_hu']; $r['stopps_nach_hu'] = (string) $r['stopps_nach_hu'];
+    $r['id'] = (int) $r['id']; $r['fahrzeug_id'] = (int) $r['fahrzeug_id']; $r['km_at_hu'] = (int) $r['km_at_hu']; $r['stopps_vor_hu'] = implode(',', stopps_liste((string) $r['stopps_vor_hu'])); $r['stopps_nach_hu'] = implode(',', stopps_liste((string) $r['stopps_nach_hu']));
     $r['hu_fahrt'] = (bool) q("SELECT COUNT(*) FROM fb_fahrten WHERE username = ? AND datum = ? AND fahrzeug_id = ? AND route LIKE '%(HU)%'", [$u, $r['datum'], $r['fahrzeug_id']])->fetchColumn();
   }
   return $rows;

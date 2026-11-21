@@ -507,8 +507,8 @@ function wende_hu_an(array $year, array $anchor, array $names, array $corr, stri
       if ($r['datum'] < $hu) $sumVor += $s; elseif ($r['datum'] > $hu) $sumNach += $s; else $sumTag += $s;
     }
     if (!$hat) { $msg[] = "- NICHT angewendet: $fzName hat im Jahr " . substr($hu, 0, 4) . ' keine einzige Fahrt. Zuerst prüfen, ob der Nutzungszeitraum stimmt, und die betroffenen Monate neu generieren.'; continue; }
-    if ($kmHu <= $start) { $msg[] = '- NICHT angewendet: HU-Stand ' . fmt_int($kmHu) . ' km liegt unter dem Jahres-Startwert ' . fmt_int($start) . ' km. Bitte HU-Kilometerstand oder Start-KM prüfen.'; continue; }
-    $start = (int) ($anchor[$fz] ?? 0);
+    $start = (int) ($anchor[$fz] ?? 0);   // Startwert DIESES Fahrzeugs (vorher prüfen war ein Fehler)
+    if ($kmHu <= $start) { $msg[] = "- NICHT angewendet: HU-Stand " . fmt_int($kmHu) . " km liegt unter dem Jahres-Startwert von $fzName (" . fmt_int($start) . ' km). Bitte HU-Kilometerstand oder Start-KM prüfen.'; continue; }
     $ende = $start + $sumVor + $sumTag + $sumNach;
 
     [$huKd, $huKp, $hin, $nachweg] = hu_kilometer($dist, $matrix, $home, $werk, $vor, $nach, $msg);
