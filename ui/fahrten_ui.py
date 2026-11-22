@@ -305,13 +305,15 @@ def render(username):
                                  key=f"pw_{jahr}")
     colKM1, colKM2 = st.columns(2)
     with colKM1:
-        target_km_min = st.number_input("Ø Dienst-KM pro Monat (Minimum)", 0, 5000,
+        target_km_min = st.number_input("Dienst-KM pro Monat (Minimum)", 0, 5000,
                                         int(saved.get("target_km_min", 1650) or 1650), 50,
                                         key=f"tmin_{jahr}")
     with colKM2:
-        target_km_max = st.number_input("Ø Dienst-KM pro Monat (Maximum)", 0, 5000,
+        target_km_max = st.number_input("Dienst-KM pro Monat (Maximum)", 0, 5000,
                                         int(saved.get("target_km_max", 2000) or 2000), 50,
                                         key=f"tmax_{jahr}")
+    st.caption("Monatsziele: Jeder Monat wird zufällig auf das Minimum ODER das Maximum "
+               "gesetzt, jeweils +/- 100 km - keine Durchschnitts-Monate mehr.")
     st.markdown("**Feinabstimmung für Feiertage/Urlaub:**")
     f1, f2 = st.columns(2)
     with f1:
