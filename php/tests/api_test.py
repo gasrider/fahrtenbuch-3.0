@@ -270,6 +270,10 @@ def run(base, app, supa_port):
         zuw = max(t4[d] - t3.get(d, 0) for d in t4)
         check(zuw <= 130, f"HU-Ausgleich gibt keinem Tag mehr als 130 km dazu (max +{zuw} km)")
         kette_ok(y4["monate"], anchor25, "2025 nach großer HU")
+        from collections import Counter
+        dd = Counter(x["datum"] for v in y4["monate"].values() for x in v)
+        neu_doppelt = [d for d, c in dd.items() if c > 1 and Counter(x["datum"] for v in y3["monate"].values() for x in v).get(d, 0) < c]
+        check(not neu_doppelt, f"HU-Ausgleich legt keine zusätzlichen Fahrten am selben Tag an ({len(neu_doppelt)})")
 
     print("PDF")
     pdf = api(base, "pdf", {"typ": "monat", "jahr": 2025, "monat": 6}, raw=True)

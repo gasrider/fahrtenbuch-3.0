@@ -502,17 +502,29 @@ function hu_privat_dazu(array &$year, int $fz, string $name, string $von, string
   foreach ($year as $m => $rows) foreach ($rows as $r) if ($inP($r) && !isset($belegt[$r['datum']]) && hu_valid($zr, $fz, $r['datum'])) $frei[$r['datum']] = $m;
   shuffle($leer); shuffle($dienst); $fk = array_keys($frei); shuffle($fk);
   $slots = [];
+  // nur Tage, die diesem Fahrzeug schon gehören – nie eine zweite Fahrt an einem Tag anlegen
   foreach ($leer as $x) $slots[] = ['row', $x];
-  foreach ($fk as $dt) $slots[] = ['neu', $dt];
   foreach ($dienst as $x) $slots[] = ['dienst', $x];
   if (!$slots) return $menge;
   $n = max(1, min(count($slots), (int) ceil($menge / 40)));
   // so viele Tage, dass kein Tag über HU_PRIVAT_TAG_MAX kommt (wenn möglich)
   $n = max($n, min(count($slots), (int) ceil($menge / HU_PRIVAT_TAG_MAX)));
   $sel = array_slice($slots, 0, $n);
-  $w = []; foreach ($sel as $k => $s) $w[$k] = $s[0] === 'dienst' ? rincl(3, 15) : rincl(15, 65);
-  $sum = array_sum($w); $z = []; foreach ($w as $k => $v) $z[$k] = (int) floor($v * $menge / $sum);
-  for ($r = $menge - array_sum($z), $j = 0; $r > 0; $r--, $j++) $z[array_keys($z)[$j % count($z)]]++;
+  $w = []; $cap = [];
+  foreach ($sel as $k => $s) { $w[$k] = $s[0] === 'dienst' ? rincl(3, 15) : rincl(15, 65); $cap[$k] = $s[0] === 'dienst' ? 30 : HU_PRIVAT_TAG_MAX; }
+  // Verteilen mit Obergrenze je Tag; reicht die Kapazität nicht, werden die Grenzen schrittweise angehoben
+  while (array_sum($cap) < $menge) foreach ($cap as $k => $c) $cap[$k] = (int) ceil($c * 1.25);
+  $z = array_fill_keys(array_keys($w), 0); $offen = $w; $rest = $menge;
+  for ($runde = 0; $rest > 0 && $offen && $runde < 50; $runde++) {
+    $sum = array_sum($offen);
+    foreach ($offen as $k => $v) {
+      $teil = (int) floor($v * $rest / $sum);
+      $z[$k] += $teil;
+      if ($z[$k] >= $cap[$k]) { $z[$k] = $cap[$k]; unset($offen[$k]); }
+    }
+    $rest = $menge - array_sum($z);
+    if ($rest > 0 && $rest < count($offen) + 1) { foreach ($offen as $k => $v) { if ($rest <= 0) break; if ($z[$k] < $cap[$k]) { $z[$k]++; $rest--; } } }
+  }
   foreach ($sel as $k => [$typ, $x]) {
     $km = $z[$k]; if ($km <= 0) continue;
     if ($typ === 'neu') {
@@ -553,17 +565,25 @@ function hu_privat_weg(array &$year, int $fz, string $von, string $hu, int $meng
   return $menge - $weg;
 }
 // Ganze Dienst-Tage zwischen Fahrzeugen umbuchen. $zu=true: zu $fz holen, sonst von $fz an andere abgeben. Liefert Rest.
-function hu_tage_umbuchen(array &$year, int $fz, array $names, string $von, string $hu, int $menge, bool $zu, array $zr, array $huDates, int &$n): int {
+function hu_tage_umbuchen(array &$year, int $fz, array $names, string $von, string $hu, int $menge, bool $zu, array $zr, array $huDates, int &$n, bool $dienstTage = true): int {
   $fzTage = []; foreach ($year as $rows) foreach ($rows as $r) if ($r['fahrzeug_id'] !== null) $fzTage[$r['fahrzeug_id']][$r['datum']] = true;
-  $kand = hu_rows($year, function ($r) use ($fz, $von, $hu, $zu, $zr, $huDates, $fzTage) {
-    if (!($r['datum'] > $von && $r['datum'] < $hu) || hu_ist_hu($r) || (int) $r['km_d'] <= 0 || $r['fahrzeug_id'] === null) return false;
+  $kand = hu_rows($year, function ($r) use ($fz, $von, $hu, $zu, $zr, $huDates, $fzTage, $dienstTage) {
+    if (!($r['datum'] > $von && $r['datum'] < $hu) || hu_ist_hu($r) || $r['fahrzeug_id'] === null) return false;
+    if ($dienstTage !== ((int) $r['km_d'] > 0)) return false;
     if ($zu) return $r['fahrzeug_id'] !== $fz && hu_valid($zr, $fz, $r['datum']) && !isset($fzTage[$fz][$r['datum']]) && hu_w_frei($huDates, $r['fahrzeug_id'], $r['datum']);
     return $r['fahrzeug_id'] === $fz;
   });
   shuffle($kand);
+  $ziel = PHP_INT_MAX;
+  if (!$dienstTage && $zu) {
+    $eigene = count(hu_rows($year, function ($r) use ($fz, $von, $hu) { return $r['fahrzeug_id'] === $fz && $r['datum'] > $von && $r['datum'] < $hu && !hu_ist_hu($r) && (int) $r['km_d'] === 0; }));
+    $ziel = max(0, (int) ceil($menge / 60) - $eigene);
+    if ($ziel === 0) return $menge;
+  }
   foreach ($kand as [$m, $i]) {
     $r = $year[$m][$i]; $km = (int) $r['km_d'] + (int) $r['km_p'];
     if ($km > $menge) continue;
+    if (!$dienstTage && $zu && $menge <= 0) break;
     if ($zu) { $neu = $fz; }
     else {
       $neu = null;
@@ -573,7 +593,8 @@ function hu_tage_umbuchen(array &$year, int $fz, array $names, string $von, stri
     unset($fzTage[$r['fahrzeug_id']][$r['datum']]); $fzTage[$neu][$r['datum']] = true;
     $year[$m][$i]['fahrzeug_id'] = $neu; $year[$m][$i]['fahrzeug'] = $names[$neu] ?? 'Unbekannt';
     $menge -= $km; $n++;
-    if ($menge < 15) break;
+    if ($dienstTage && $menge < 15) break;
+    if (!$dienstTage && $n >= $ziel) break;
   }
   return $menge;
 }
@@ -620,6 +641,9 @@ function wende_hu_an(array $year, array $anchor, array $names, array $corr, stri
     if ($rest > 0) {
       $rest = hu_tage_umbuchen($year, $fz, $names, $von, $hu, $rest, true, $zr, $huDates, $n);
       if ($n) $msg[] = "- $n Dienst-Tag(e) von anderen Fahrzeugen auf $fzName umgebucht (" . fmt_int($delta - $rest) . ' km).';
+      $n2 = 0; $v2 = $rest;
+      $rest = hu_tage_umbuchen($year, $fz, $names, $von, $hu, $rest, true, $zr, $huDates, $n2, false);
+      if ($n2) $msg[] = "- $n2 private/freie Tag(e) von anderen Fahrzeugen auf $fzName umgebucht (" . fmt_int($v2 - $rest) . ' km), damit die privaten km nicht auf wenige Tage fallen.';
       $vorher = $rest; $rest = hu_privat_dazu($year, $fz, $fzName, $von, $hu, $rest, $zr);
       if ($vorher > 0) $msg[] = '- ' . fmt_int($vorher - $rest) . " km als Privatfahrten über den ganzen Zeitraum verteilt.";
     } elseif ($rest < 0) {
