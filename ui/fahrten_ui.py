@@ -312,8 +312,9 @@ def render(username):
         target_km_max = st.number_input("Dienst-KM pro Monat (Maximum)", 0, 5000,
                                         int(saved.get("target_km_max", 2000) or 2000), 50,
                                         key=f"tmax_{jahr}")
-    st.caption("Monatsziele: Jeder Monat wird zufällig auf das Minimum ODER das Maximum "
-               "gesetzt, jeweils +/- 100 km - keine Durchschnitts-Monate mehr.")
+    st.caption("Monatsziele: Jeder Monat bekommt einen eigenen Zufallswert zwischen "
+               "Minimum - 100 km und Maximum + 100 km - die Monate starten dadurch "
+               "nie mit demselben Kilometerstand, sondern sind einfach gestreut.")
     st.markdown("**Feinabstimmung für Feiertage/Urlaub:**")
     f1, f2 = st.columns(2)
     with f1:
