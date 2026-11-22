@@ -481,17 +481,116 @@ function hu_skaliere(array &$year, int $fz, string $hu, bool $vor, float $f, ?in
   for ($j = 0; $rest > 0 && $j < 100000; $j++, $rest--) { [$m, $i, $k] = $teile[$j % count($teile)]; $year[$m][$i][$k]++; }
 }
 
+/* ---------- HU v6: Ausgleich über alle Fahrzeuge + private km statt Hochskalieren weniger Tage ---------- */
+const HU_PRIVAT_TAG_MAX = 120;   // so viele Privat-km kommen höchstens an einem Tag dazu (außer es reicht nicht)
+
+function hu_valid(array $zr, int $fz, string $d): bool { foreach ($zr as [$v, $b, $f]) if ($f === $fz && $v <= $d && $d <= $b) return true; return false; }
+// Darf ein Tag von/zu Fahrzeug $w verschoben werden, ohne eine HU von $w zu verfälschen? (keine HU von $w nach diesem Tag)
+function hu_w_frei(array $huDates, int $w, string $d): bool { foreach ($huDates[$w] ?? [] as $h) if ($h >= $d) return false; return true; }
+function hu_rows(array $year, callable $f): array { $o = []; foreach ($year as $m => $rows) foreach ($rows as $i => $r) if ($f($r)) $o[] = [$m, $i]; return $o; }
+function hu_ist_hu(array $r): bool { return strpos((string) $r['route'], '(HU)') !== false; }
+
+// Private km dazugeben: viele kleine Fahrten über den ganzen Zeitraum, Summe exakt $menge
+function hu_privat_dazu(array &$year, int $fz, string $name, string $von, string $hu, int $menge, array $zr): int {
+  if ($menge <= 0) return 0;
+  $inP = function ($r) use ($von, $hu) { return $r['datum'] > $von && $r['datum'] < $hu && !hu_ist_hu($r); };
+  $leer = hu_rows($year, function ($r) use ($fz, $inP) { return $inP($r) && $r['fahrzeug_id'] === $fz && (int) $r['km_d'] === 0; });
+  $dienst = hu_rows($year, function ($r) use ($fz, $inP) { return $inP($r) && $r['fahrzeug_id'] === $fz && (int) $r['km_d'] > 0; });
+  $belegt = []; foreach ($year as $rows) foreach ($rows as $r) if ($r['fahrzeug_id'] === $fz) $belegt[$r['datum']] = true;
+  $frei = []; $d = $von === '' ? null : $von;
+  foreach ($year as $m => $rows) foreach ($rows as $r) if ($inP($r) && !isset($belegt[$r['datum']]) && hu_valid($zr, $fz, $r['datum'])) $frei[$r['datum']] = $m;
+  shuffle($leer); shuffle($dienst); $fk = array_keys($frei); shuffle($fk);
+  $slots = [];
+  foreach ($leer as $x) $slots[] = ['row', $x];
+  foreach ($fk as $dt) $slots[] = ['neu', $dt];
+  foreach ($dienst as $x) $slots[] = ['dienst', $x];
+  if (!$slots) return $menge;
+  $n = max(1, min(count($slots), (int) ceil($menge / 40)));
+  // so viele Tage, dass kein Tag über HU_PRIVAT_TAG_MAX kommt (wenn möglich)
+  $n = max($n, min(count($slots), (int) ceil($menge / HU_PRIVAT_TAG_MAX)));
+  $sel = array_slice($slots, 0, $n);
+  $w = []; foreach ($sel as $k => $s) $w[$k] = $s[0] === 'dienst' ? rincl(3, 15) : rincl(15, 65);
+  $sum = array_sum($w); $z = []; foreach ($w as $k => $v) $z[$k] = (int) floor($v * $menge / $sum);
+  for ($r = $menge - array_sum($z), $j = 0; $r > 0; $r--, $j++) $z[array_keys($z)[$j % count($z)]]++;
+  foreach ($sel as $k => [$typ, $x]) {
+    $km = $z[$k]; if ($km <= 0) continue;
+    if ($typ === 'neu') {
+      $m = $frei[$x]; [$a, $e, $du] = zeiten_privat($km, $km > 150);
+      $year[$m][] = ['datum' => $x, 'fahrzeug_id' => $fz, 'fahrzeug' => $name, 'route' => 'Privatfahrt', 'km_d' => 0, 'km_p' => $km, 'abf' => $a, 'ank' => $e, 'dauer' => $du, 'abfahrt_km' => 0];
+      continue;
+    }
+    [$m, $i] = $x; $r = &$year[$m][$i];
+    if ($typ === 'row' && ((int) $r['km_p'] === 0 || (string) $r['abf'] === '00:00')) {
+      [$r['abf'], $r['ank'], $r['dauer']] = zeiten_privat((int) $r['km_p'] + $km, $km > 150);
+      if (strpos((string) $r['route'], 'Keine Fahrt') === 0 || trim((string) $r['route']) === '') $r['route'] = 'Privatfahrt';
+    } else {
+      $r['dauer'] = hhmm(min(dauer_min($r['dauer']) + intdiv($km * 60, 70), 840));
+      $r['ank'] = hhmm(min(dauer_min($r['abf']) + dauer_min($r['dauer']), 23 * 60 + 59));
+    }
+    $r['km_p'] = (int) $r['km_p'] + $km;
+    unset($r);
+  }
+  foreach ($year as &$rows) sort_rows($rows); unset($rows);
+  return 0;
+}
+// Private km abziehen (gleichmäßig), liefert den Rest, der nicht abgezogen werden konnte
+function hu_privat_weg(array &$year, int $fz, string $von, string $hu, int $menge): int {
+  $rows = hu_rows($year, function ($r) use ($fz, $von, $hu) { return $r['fahrzeug_id'] === $fz && $r['datum'] > $von && $r['datum'] < $hu && !hu_ist_hu($r) && (int) $r['km_p'] > 0; });
+  $p = 0; foreach ($rows as [$m, $i]) $p += (int) $year[$m][$i]['km_p'];
+  if ($p <= 0 || $menge <= 0) return $menge;
+  $weg = min($menge, $p); $f = ($p - $weg) / $p; $neuSum = 0;
+  foreach ($rows as [$m, $i]) { $year[$m][$i]['_neu'] = (int) floor($year[$m][$i]['km_p'] * $f); $neuSum += $year[$m][$i]['_neu']; }
+  for ($r = ($p - $weg) - $neuSum, $j = 0; $r > 0; $r--, $j++) { [$m, $i] = $rows[$j % count($rows)]; $year[$m][$i]['_neu']++; }
+  foreach ($rows as [$m, $i]) {
+    $r = &$year[$m][$i]; $alt = (int) $r['km_p']; $r['km_p'] = $r['_neu']; unset($r['_neu']);
+    if ((int) $r['km_d'] === 0) {
+      if ($r['km_p'] === 0) { $r['route'] = 'Keine Fahrt'; $r['abf'] = $r['ank'] = $r['dauer'] = '00:00'; }
+      else { $d = max(15, (int) round(dauer_min($r['dauer']) * $r['km_p'] / max(1, $alt))); $r['dauer'] = hhmm($d); $r['ank'] = hhmm(min(dauer_min($r['abf']) + $d, 23 * 60 + 59)); }
+    }
+    unset($r);
+  }
+  return $menge - $weg;
+}
+// Ganze Dienst-Tage zwischen Fahrzeugen umbuchen. $zu=true: zu $fz holen, sonst von $fz an andere abgeben. Liefert Rest.
+function hu_tage_umbuchen(array &$year, int $fz, array $names, string $von, string $hu, int $menge, bool $zu, array $zr, array $huDates, int &$n): int {
+  $fzTage = []; foreach ($year as $rows) foreach ($rows as $r) if ($r['fahrzeug_id'] !== null) $fzTage[$r['fahrzeug_id']][$r['datum']] = true;
+  $kand = hu_rows($year, function ($r) use ($fz, $von, $hu, $zu, $zr, $huDates, $fzTage) {
+    if (!($r['datum'] > $von && $r['datum'] < $hu) || hu_ist_hu($r) || (int) $r['km_d'] <= 0 || $r['fahrzeug_id'] === null) return false;
+    if ($zu) return $r['fahrzeug_id'] !== $fz && hu_valid($zr, $fz, $r['datum']) && !isset($fzTage[$fz][$r['datum']]) && hu_w_frei($huDates, $r['fahrzeug_id'], $r['datum']);
+    return $r['fahrzeug_id'] === $fz;
+  });
+  shuffle($kand);
+  foreach ($kand as [$m, $i]) {
+    $r = $year[$m][$i]; $km = (int) $r['km_d'] + (int) $r['km_p'];
+    if ($km > $menge) continue;
+    if ($zu) { $neu = $fz; }
+    else {
+      $neu = null;
+      foreach ($names as $w => $nm) if ($w !== $fz && hu_valid($zr, $w, $r['datum']) && !isset($fzTage[$w][$r['datum']]) && hu_w_frei($huDates, $w, $r['datum'])) { $neu = $w; break; }
+      if ($neu === null) continue;
+    }
+    unset($fzTage[$r['fahrzeug_id']][$r['datum']]); $fzTage[$neu][$r['datum']] = true;
+    $year[$m][$i]['fahrzeug_id'] = $neu; $year[$m][$i]['fahrzeug'] = $names[$neu] ?? 'Unbekannt';
+    $menge -= $km; $n++;
+    if ($menge < 15) break;
+  }
+  return $menge;
+}
+
 /**
- * Wendet HU-Einträge auf EIN Jahr an. $corr: [['fahrzeug_id','datum','km_at_hu','werkstattort','stopps_vor'=>[],'stopps_nach'=>[]]]
- * $anchor: Jahres-Startkilometer je Fahrzeug. Rückgabe: [$year, $endKm, $meldungen]
+ * Wendet HU-Einträge auf EIN Jahr an (v6). $corr sortiert nach Datum; $zr: [[von,bis,fahrzeug_id]], $huDates: [fz => [datum,...]] aller HU-Einträge des Jahres.
+ * Tacho bei Ankunft Werkstatt = exakt HU-Stand. Die Differenz wird im Zeitraum vor der HU ausgeglichen:
+ * erst Dienst-Tage zwischen Fahrzeugen umbuchen, dann private km dazu/weg. Fahrten nach der HU bleiben unverändert.
+ * Rückgabe: [$year, $endKm, $meldungen, $angewendeteIndizes]
  */
-function wende_hu_an(array $year, array $anchor, array $names, array $corr, string $wohnortRaw, array $distanzen, array $matrix): array {
+function wende_hu_an(array $year, array $anchor, array $names, array $corr, string $wohnortRaw, array $distanzen, array $matrix, array $zr = [], array $huDates = []): array {
   $msg = [];
   $home = (string) $wohnortRaw;
   if (strpos($home, ',') !== false) $home = preg_replace('/^[A-Za-z]?-?\d{4,5}\s+/', '', trim(substr($home, strrpos($home, ',') + 1)));
   $dist = [];
   foreach ($distanzen as $o => $km) $dist[norm_ort($o)] = max(0, (int) $km);
   if ($home !== '') $dist[norm_ort($home)] = 0;
+  uasort($corr, function ($a, $b) { return strcmp($a['datum'], $b['datum']); });
 
   $ok = [];
   foreach ($corr as $ci => $c) {
@@ -499,66 +598,75 @@ function wende_hu_an(array $year, array $anchor, array $names, array $corr, stri
     $werk = trim((string) $c['werkstattort']); $vor = $c['stopps_vor']; $nach = $c['stopps_nach'];
     $fzName = $names[$fz] ?? "FZ $fz";
     $msg[] = "**HU $fzName am " . fmt_datum($hu) . ' (Tacho laut HU: ' . fmt_int($kmHu) . ' km)**';
-
-    $sumVor = 0; $sumNach = 0; $sumTag = 0; $hat = false;
-    foreach ($year as $rows) foreach ($rows as $r) {
-      if ((int) ($r['fahrzeug_id'] ?? -1) !== $fz || $r['fahrzeug_id'] === null) continue;
-      $hat = true; $s = (int) $r['km_d'] + (int) $r['km_p'];
-      if ($r['datum'] < $hu) $sumVor += $s; elseif ($r['datum'] > $hu) $sumNach += $s; else $sumTag += $s;
-    }
-    if (!$hat) { $msg[] = "- NICHT angewendet: $fzName hat im Jahr " . substr($hu, 0, 4) . ' keine einzige Fahrt. Zuerst prüfen, ob der Nutzungszeitraum stimmt, und die betroffenen Monate neu generieren.'; continue; }
-    $start = (int) ($anchor[$fz] ?? 0);   // Startwert DIESES Fahrzeugs (vorher prüfen war ein Fehler)
-    if ($kmHu <= $start) { $msg[] = "- NICHT angewendet: HU-Stand " . fmt_int($kmHu) . " km liegt unter dem Jahres-Startwert von $fzName (" . fmt_int($start) . ' km). Bitte HU-Kilometerstand oder Start-KM prüfen.'; continue; }
-    $ende = $start + $sumVor + $sumTag + $sumNach;
+    // Zeitraum: nach einer früheren HU desselben Fahrzeugs im selben Jahr, sonst ab 1.1.
+    $von = '';
+    foreach ($huDates[$fz] ?? [] as $h) if ($h < $hu && $h > $von) $von = $h;
+    if (!hu_rows($year, function ($r) use ($fz) { return $r['fahrzeug_id'] === $fz; })) { $msg[] = "- NICHT angewendet: $fzName hat im Jahr " . substr($hu, 0, 4) . ' keine einzige Fahrt. Zuerst prüfen, ob der Nutzungszeitraum stimmt, und die betroffenen Monate neu generieren.'; continue; }
+    // Tacho am Beginn des Zeitraums aus der aktuellen Kette
+    $tmp = $year; kette_neu($tmp, $anchor); $start = (int) ($anchor[$fz] ?? 0);
+    if ($von !== '') foreach ($tmp as $rows) foreach ($rows as $r) if ($r['fahrzeug_id'] === $fz && $r['datum'] === $von) $start = (int) $r['abfahrt_km'] + (int) $r['km_d'] + (int) $r['km_p'];
+    if ($kmHu <= $start) { $msg[] = "- NICHT angewendet: HU-Stand " . fmt_int($kmHu) . " km liegt unter dem Startwert von $fzName (" . fmt_int($start) . ' km). Bitte HU-Kilometerstand oder Start-KM prüfen.'; continue; }
+    $sum = 0;
+    foreach ($year as $rows) foreach ($rows as $r) if ($r['fahrzeug_id'] === $fz && $r['datum'] > $von && $r['datum'] < $hu) $sum += (int) $r['km_d'] + (int) $r['km_p'];
 
     [$huKd, $huKp, $hin, $nachweg] = hu_kilometer($dist, $matrix, $home, $werk, $vor, $nach, $msg);
-    // KERN: Tacho bei Ankunft Werkstatt = km_at_hu. Abfahrt am HU-Tag = km_at_hu − Weg zur Werkstatt.
-    $zielVor = $kmHu - $start - $hin;
-    $fVor = ($sumVor > 0 && $zielVor > 0) ? $zielVor / $sumVor : 1.0;
-    $abfHuTag = $kmHu - $hin;
-    $zielNach = $ende - $kmHu - $nachweg;
-    $fNach = ($sumNach > 0 && $zielNach > 0) ? $zielNach / $sumNach : 1.0;
-    $fv = clip($fVor, HU_FAKTOR_MIN, HU_FAKTOR_MAX); $fn = clip($fNach, HU_FAKTOR_MIN, HU_FAKTOR_MAX);
-    if (abs($fv - $fVor) > 0.01) $msg[] = '- ACHTUNG: HU-Stand passt stark nicht zu den generierten km (Faktor wäre ' . number_format($fVor, 2, ',', '') . ') – auf ' . number_format($fv, 2, ',', '') . ' begrenzt.';
-    if (abs($fn - $fNach) > 0.01) $msg[] = '- Faktor nach HU auf ' . number_format($fn, 2, ',', '') . ' begrenzt.';
+    $ziel = $kmHu - $start - $hin;           // so viele km muss das Fahrzeug bis zur Abfahrt am HU-Tag fahren
+    $delta = $ziel - $sum;
     $msg[] = "- HU-Fahrt: $huKd km dienstlich, $huKp km privat (Weg zur Werkstatt)";
-    $msg[] = '- Abfahrt am HU-Tag: **' . fmt_int($abfHuTag) . ' km** (= ' . fmt_int($kmHu) . " minus $hin km Weg zur Werkstatt) – Tacho zeigt bei Ankunft Werkstatt genau den HU-Stand.";
-    $msg[] = '- Faktor vor HU: ' . number_format($fv, 3, ',', '') . ' | nach HU: ' . number_format($fn, 3, ',', '') . ' (Jahressumme bleibt erhalten)';
+    $msg[] = '- Bis zur HU gefahren laut Fahrten: ' . fmt_int($sum) . ' km, nötig: ' . fmt_int(max(0, $ziel)) . ' km → Differenz ' . ($delta >= 0 ? '+' : '') . fmt_int($delta) . ' km';
+    if ($ziel < 0) { $msg[] = '- NICHT angewendet: der HU-Stand ist kleiner als Startwert + Weg zur Werkstatt.'; continue; }
+    $n = 0; $rest = $delta;
+    if ($rest > 0) {
+      $rest = hu_tage_umbuchen($year, $fz, $names, $von, $hu, $rest, true, $zr, $huDates, $n);
+      if ($n) $msg[] = "- $n Dienst-Tag(e) von anderen Fahrzeugen auf $fzName umgebucht (" . fmt_int($delta - $rest) . ' km).';
+      $vorher = $rest; $rest = hu_privat_dazu($year, $fz, $fzName, $von, $hu, $rest, $zr);
+      if ($vorher > 0) $msg[] = '- ' . fmt_int($vorher - $rest) . " km als Privatfahrten über den ganzen Zeitraum verteilt.";
+    } elseif ($rest < 0) {
+      $weg = -$rest; $vorher = $weg; $weg = hu_privat_weg($year, $fz, $von, $hu, $weg);
+      if ($vorher !== $weg) $msg[] = '- ' . fmt_int($vorher - $weg) . " km private Fahrten von $fzName weggenommen.";
+      if ($weg > 0) { $v2 = $weg; $weg = hu_tage_umbuchen($year, $fz, $names, $von, $hu, $weg, false, $zr, $huDates, $n); if ($n) $msg[] = "- $n Dienst-Tag(e) von $fzName an andere Fahrzeuge abgegeben (" . fmt_int($v2 - $weg) . ' km).'; }
+      if ($weg > 0) {
+        // Rest: Dienst-km des Fahrzeugs gleichmäßig kürzen (höchstens auf die Hälfte)
+        $rows = hu_rows($year, function ($r) use ($fz, $von, $hu) { return $r['fahrzeug_id'] === $fz && $r['datum'] > $von && $r['datum'] < $hu && !hu_ist_hu($r) && (int) $r['km_d'] > 0; });
+        $kd = 0; foreach ($rows as [$m, $i]) $kd += (int) $year[$m][$i]['km_d'];
+        $kann = min($weg, intdiv($kd, 2));
+        $r = $kann;
+        for ($j = 0; $r > 0 && $rows && $j < 20 * count($rows); $j++) {
+          [$m, $i] = $rows[$j % count($rows)]; $s = min($r, max(1, (int) ceil($kann / count($rows))));
+          if ($year[$m][$i]['km_d'] - $s >= 5) { $year[$m][$i]['km_d'] -= $s; $r -= $s; }
+        }
+        $msg[] = '- ' . fmt_int($kann - $r) . " km Dienst-km von $fzName gleichmäßig gekürzt.";
+        $weg -= $kann - $r;
+      }
+      $rest = -$weg;
+    }
+    if ($rest !== 0) $msg[] = '- ACHTUNG: ' . fmt_int(abs($rest)) . ' km konnten nicht ausgeglichen werden – der HU-Stand passt nicht zu den Fahrten (Eingabe prüfen).';
 
     $parts = array_merge([$home], $vor, [$werk . ' (HU)'], $nach, [$home]);
     $huRoute = implode(' - ', array_values(array_filter($parts, function ($x) { return $x !== ''; })));
     $huDauer = 90 + (count($vor) + 1 + count($nach)) * 20;
     $huRow = ['route' => $huRoute, 'km_d' => $huKd, 'km_p' => $huKp, 'abf' => '08:30', 'ank' => hhmm(8 * 60 + 30 + $huDauer), 'dauer' => hhmm($huDauer)];
-
-    // Skalieren; die beim Abrunden verlorenen Rest-km werden verteilt, damit der HU-Stand EXAKT stimmt
-    // (die Python-Version hat nur abgeschnitten und lag dadurch einige km daneben).
-    $exaktVor = abs($fv - $fVor) <= 0.01 && $zielVor > 0 ? $zielVor : null;
-    $exaktNach = abs($fn - $fNach) <= 0.01 && $zielNach > 0 ? $zielNach : null;
-    hu_skaliere($year, $fz, $hu, true, $fv, $exaktVor);
-    hu_skaliere($year, $fz, $hu, false, $fn, $exaktNach);
-
     $angelegt = false;
     foreach ($year as $m => &$rows) {
-      foreach ($rows as &$r) {
-        if ($r['fahrzeug_id'] !== null && (int) $r['fahrzeug_id'] === $fz && $r['datum'] === $hu) { $r = array_merge($r, $huRow); $angelegt = true; }
-      }
+      foreach ($rows as &$r) if ($r['fahrzeug_id'] === $fz && $r['datum'] === $hu) { $r = array_merge($r, $huRow); $angelegt = true; }
       unset($r);
       if (!$angelegt) {
-        foreach ($rows as &$r) {
-          if ($r['datum'] === $hu) { $r = array_merge($r, $huRow, ['fahrzeug_id' => $fz, 'fahrzeug' => $fzName]); $angelegt = true; break; }
-        }
+        foreach ($rows as &$r) if ($r['datum'] === $hu) { $r = array_merge($r, $huRow, ['fahrzeug_id' => $fz, 'fahrzeug' => $fzName]); $angelegt = true; break; }
         unset($r);
-        if (!$angelegt && (int) substr($hu, 5, 2) === (int) $m) {
-          $rows[] = array_merge(['datum' => $hu, 'fahrzeug_id' => $fz, 'fahrzeug' => $fzName, 'abfahrt_km' => 0], $huRow);
-          sort_rows($rows);
-          $angelegt = true;
-        }
+        if (!$angelegt && (int) substr($hu, 5, 2) === (int) $m) { $rows[] = array_merge(['datum' => $hu, 'fahrzeug_id' => $fz, 'fahrzeug' => $fzName, 'abfahrt_km' => 0], $huRow); sort_rows($rows); $angelegt = true; }
       }
     }
     unset($rows);
-    $msg[] = $angelegt ? '- HU-Fahrt am ' . fmt_datum($hu) . ' angelegt.' : '- WARNUNG: HU-Tag liegt außerhalb der gespeicherten Monate!';
-    if ($angelegt) $ok[] = $ci;
+    if ($angelegt) {
+      $tmp = $year; kette_neu($tmp, $anchor); $abf = null;
+      foreach ($tmp as $rows) foreach ($rows as $r) if ($r['fahrzeug_id'] === $fz && $r['datum'] === $hu) $abf = (int) $r['abfahrt_km'];
+      $msg[] = '- Abfahrt am HU-Tag: **' . fmt_int((int) $abf) . ' km** + ' . $hin . ' km Weg zur Werkstatt = **' . fmt_int((int) $abf + $hin) . ' km** bei Ankunft (HU-Stand ' . fmt_int($kmHu) . ').';
+      $msg[] = '- Fahrten nach der HU bleiben unverändert; Endstände und Folgejahr werden nachgezogen.';
+      $ok[] = $ci;
+    } else $msg[] = '- WARNUNG: HU-Tag liegt außerhalb der gespeicherten Monate!';
   }
+  // erlaubte Korrektur: Fahrzeit verlängern, wo die Geschwindigkeit unrealistisch wäre
+  foreach ($year as &$rows) korrigiere_geschwindigkeiten($rows); unset($rows);
   $end = kette_neu($year, $anchor);
   return [$year, $end, $msg, $ok];
 }

@@ -31,8 +31,11 @@ tests/ui_test.mjs          ← Playwright gegen laufende Instanz (Desktop + iPho
   JEDE Schreibaktion auf Fahrten läuft über `year_commit()`: ganzes Jahr ab Anker neu verketten, Folgejahres-Anker = Endstand,
   vorhandene Folgejahre werden nachgezogen (Kette lückenlos über Jahresgrenzen).
 - Generator: Distanz zuerst aus `fb_distanz_matrix`, dann Differenz „km einfach“ (min. 8), dann Zufall 15–34. Monats-Skalierung 0,80–1,35.
-- HU v5: Tacho bei Ankunft Werkstatt = exakt HU-Stand (Rest-km werden verteilt), Weg zur Werkstatt privat, Kundenstopps dienstlich,
-  **nur einmal pro HU-Eintrag** (`fb_hu.angewendet_am`; wird beim Neu-Generieren des Monats zurückgesetzt).
+- HU v6 (Wunsch des Betreibers, ersetzt das Skalieren aus v5): Tacho bei Ankunft Werkstatt = exakt HU-Stand. Differenz wird im Zeitraum
+  vor der HU ausgeglichen: 1. ganze Dienst-Tage zwischen Fahrzeugen umbuchen (nur wenn Zeitraum passt und keine spätere HU des anderen
+  Fahrzeugs verfälscht wird), 2. Rest als kleine Privatfahrten (≤ ~120 km/Tag) bzw. Privat-km abziehen, 3. notfalls Dienst-km kürzen.
+  Nach der HU bleibt alles unverändert (kein „Jahressumme bleibt“-Ausgleich mehr – der erzeugte 700-km-Tage). Weg zur Werkstatt privat,
+  Kundenstopps dienstlich. Ein Eintrag gilt als erledigt, wenn die HU-Fahrt in den Fahrten steht (`hu_fahrt`).
 - Taggeld nur bei km_d > 0. KM-Geld laut Stammdaten (0,42).
 - `auto_correct_red_flags` (Kilometer verschleiern) wird bewusst NICHT umgesetzt. Erlaubt ist nur: Fahrzeit verlängern (>100 km/h).
 - Excel-Import: ID-Spalten ignorieren, Zuordnung über Bezeichnung/Kennzeichen.

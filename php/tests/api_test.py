@@ -247,6 +247,29 @@ def run(base, app, supa_port):
         check(h2 and h2[0]["abfahrt_km"] + 30 == hu2, "Tacho T6.1 bei Ankunft Werkstatt = HU-Stand")
         check(h2 and h2[0]["km_d"] == 10, f"HU-Tag dienstl. km plausibel ({h2[0]['km_d'] if h2 else '-'})")
         kette_ok(y2["monate"], anchor25, "2025 nach zweiter HU")
+        alle = [x for v in y2["monate"].values() for x in v]
+        check(max(x["km_d"] for x in alle) <= 400 and max(x["km_d"] + x["km_p"] for x in alle if "(HU)" not in x["route"]) <= 900, f"kein Tag mit absurden km (max dienstl. {max(x['km_d'] for x in alle)})")
+
+    print("HU mit großer Differenz: Ausgleich über Fahrzeuge + privat, keine Riesentage")
+    t6 = ids["VW T6.1"]
+    y3 = api(base, "year_get", {"jahr": 2025})
+    nov = [x for x in y3["monate"]["11"] if x["fahrzeug_id"] == t6]
+    if nov:
+        d3 = nov[len(nov) // 2]
+        hu3 = d3["abfahrt_km"] + 3000 + 30
+        rows = [{"id": h["id"], **{k: h[k] for k in ("fahrzeug_id", "datum", "km_at_hu", "werkstattort", "stopps_vor_hu", "stopps_nach_hu")}} for h in api(base, "init")["hu"]]
+        rows.append({"fahrzeug_id": t6, "datum": d3["datum"], "km_at_hu": hu3, "werkstattort": "Eugendorf", "stopps_vor_hu": "Zell am Moos", "stopps_nach_hu": ""})
+        api(base, "hu_save", {"rows": rows})
+        r = api(base, "hu_apply", {})
+        print("    " + "\n    ".join(r.get("meldungen", [])))
+        y4 = api(base, "year_get", {"jahr": 2025})
+        h4 = [x for x in y4["monate"]["11"] if x["datum"] == d3["datum"] and x["fahrzeug_id"] == t6]
+        check(h4 and h4[0]["abfahrt_km"] + 30 == hu3, "großer HU-Sprung: Tacho bei Ankunft exakt")
+        tag = lambda yy: {d: sum(x["km_d"] + x["km_p"] for v in yy["monate"].values() for x in v if x["datum"] == d and "(HU)" not in x["route"]) for d in {x["datum"] for v in yy["monate"].values() for x in v}}
+        t3, t4 = tag(y3), tag(y4)
+        zuw = max(t4[d] - t3.get(d, 0) for d in t4)
+        check(zuw <= 130, f"HU-Ausgleich gibt keinem Tag mehr als 130 km dazu (max +{zuw} km)")
+        kette_ok(y4["monate"], anchor25, "2025 nach großer HU")
 
     print("PDF")
     pdf = api(base, "pdf", {"typ": "monat", "jahr": 2025, "monat": 6}, raw=True)

@@ -269,7 +269,10 @@ case 'hu_apply': {
     $corr = array_map(function ($h) { return ['fahrzeug_id' => $h['fahrzeug_id'], 'datum' => $h['datum'], 'km_at_hu' => $h['km_at_hu'], 'werkstattort' => $h['werkstattort'],
       'stopps_vor' => stopps_liste($h['stopps_vor_hu']), 'stopps_nach' => stopps_liste($h['stopps_nach_hu'])]; }, $list);
     $anchor = anchor_get_or_create($n, $jahr, $fz);
-    [$year, , $m, $ok] = wende_hu_an($year, $anchor, $names, $corr, (string) $s['wohnort'], distanzen_load($n), matrix_load($n));
+    $zr = array_map(function ($z) { return [$z['von'], $z['bis'], (int) $z['fahrzeug_id']]; }, zeitraeume_load($n));
+    $huDates = [];
+    foreach ($all as $h) if ((int) substr($h['datum'], 0, 4) === $jahr) $huDates[$h['fahrzeug_id']][] = $h['datum'];
+    [$year, , $m, $ok] = wende_hu_an($year, $anchor, $names, $corr, (string) $s['wohnort'], distanzen_load($n), matrix_load($n), $zr, $huDates);
     $msg = array_merge($msg, $m);
     if (!$ok) continue;
     [$year] = year_commit($n, $jahr, $year, $fz);

@@ -555,7 +555,7 @@ function viewHU(main) {
   const force = h('input', { type: 'checkbox' }); const out = h('div', { style: 'display:grid;gap:8px' });
   const offen = d.hu.filter(x => !x.hu_fahrt).length;
   main.append(h('div.card', null, h('h2', null, 'Fahrten an HU anpassen'),
-    msgBox('warn', 'Pro HU-Eintrag nur EINMAL! Kilometer vor dem HU-Datum werden so skaliert, dass der Tacho bei Ankunft in der Werkstatt genau den HU-Stand zeigt; danach kompensierend (Jahressumme bleibt). Weg zur Werkstatt = privat, Kundenstopps = dienstlich. Bereits angewendete Einträge werden übersprungen.'),
+    msgBox('warn', 'Der Tacho zeigt bei Ankunft in der Werkstatt genau den HU-Stand. Die Differenz wird im ganzen Zeitraum vor der HU ausgeglichen: zuerst werden Dienst-Tage zwischen den Fahrzeugen umgebucht, der Rest kommt als kleine Privatfahrten dazu bzw. wird bei Privatfahrten abgezogen – nie mehr als ca. 120 km an einem Tag. Fahrten nach der HU bleiben unverändert. Weg zur Werkstatt = privat, Kundenstopps = dienstlich. Einträge mit vorhandener HU-Fahrt werden übersprungen.'),
     h('p.hint', null, `${offen} offene(r) Eintrag/Einträge. Nach einem Neu-Generieren des Monats wird der Eintrag automatisch wieder „offen“.`),
     h('label.chk', null, force, 'Auch bereits angewendete Einträge nochmal anwenden (nur wenn du genau weißt, warum)'),
     h('div.row', null, h('button.btn', { type: 'button', onclick: () => run(async () => {
