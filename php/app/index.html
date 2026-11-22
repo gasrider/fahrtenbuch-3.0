@@ -453,9 +453,11 @@ function viewFahrzeuge(main) {
       h('button.btn', { type: 'button', onclick: saveFz }, 'Fahrzeuge & Zeiträume speichern'))));
 
   // --- Orte ---
-  const GO = grid([{ k: 'ort', label: 'Ort', type: 'text', w: '220px' }, { k: 'km_einfach', label: 'km einfach (vom Wohnort)', type: 'int', nullable: true, w: '120px', min: 0 }], d.orte);
+  const GO = grid([{ k: 'ort', label: 'Ort', type: 'text', w: '220px' }, { k: 'km_einfach', label: 'km einfach (vom Wohnort)', type: 'int', nullable: true, w: '120px', min: 0 },
+    { k: 'gefunden', label: 'Auf der Karte gefunden als', type: 'ro', fmt: r => { const g = r.gefunden || ''; const bad = g === 'NICHT GEFUNDEN' || (g && !/Österreich/.test(g)) || (+r.km_einfach > 80);
+      return g ? h('span', { style: 'white-space:normal;text-align:left;display:block;max-width:420px;' + (bad ? 'color:var(--hi);font-weight:700' : '') }, (bad ? '⚠ ' : '') + g) : ''; } }], d.orte);
   main.append(h('div.card', null, h('h2', null, 'Orte & Distanzen'),
-    h('p.hint', null, 'Kundenorte und Werkstätten mit der einfachen Strecke vom Wohnort. Wird unten automatisch aus der Online-Karte gefüllt. Leer = unbekannt.'), GO.el,
+    h('p.hint', null, 'Kundenorte und Werkstätten mit der einfachen Strecke vom Wohnort. Wird unten automatisch aus der Online-Karte gefüllt. Leer = unbekannt. Rot markiert = Ort wahrscheinlich falsch gefunden (außerhalb Österreichs oder über 80 km weit): Namen genauer schreiben, z. B. „Kirchberg bei Mattighofen“, speichern und Distanzen neu berechnen (Häkchen „nur fehlende“ weg).'), GO.el,
     h('div.row', null, h('button.btn.sec', { type: 'button', onclick: () => GO.addRow({ ort: '', km_einfach: null }) }, '+ Ort'),
       h('button.btn.sec', { type: 'button', onclick: async () => { const r = await importFile('orte'); if (r) { const have = new Set(GO.rows().map(o => o.ort.toLowerCase())); let n = 0; r.orte.forEach(o => { if (!have.has(o.toLowerCase())) { GO.addRow({ ort: o, km_einfach: null }); n++; } }); toast(n + ' neue Orte übernommen – bitte speichern.'); } } }, 'Orte.xlsx / .csv laden'),
       h('span.right'), h('button.btn', { type: 'button', onclick: () => run(async () => { const r = await api('orte_save', { orte: GO.rows() }); d.orte = r.orte; toast('Orte gespeichert.'); renderApp(); }) }, 'Orte speichern'))));

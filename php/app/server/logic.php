@@ -381,6 +381,7 @@ function scan_red_flags(array $rows): array {
       $dm = dauer_min($r['dauer']);
       if ($dm > 0) { $speed = $total / $dm * 60; if ($speed > 130) $flags[] = "$d: Unrealistische Geschwindigkeit! $total km in {$r['dauer']} (~" . round($speed) . ' km/h).'; }
     }
+    if ((int) $r['km_d'] > 300) $flags[] = "$d: Sehr hohe Dienst-km an einem Tag ({$r['km_d']} km) – Entfernungen der Orte in dieser Fahrt prüfen (Reiter „Fahrzeuge & Orte“).";
     if ($total === 0 && !ist_ignore_route($r['route'])) $flags[] = "$d: Fahrt „" . mb_substr((string) $r['route'], 0, 30) . "…“ eingetragen, aber 0 km.";
     $a = dauer_min($r['abf']); $b = dauer_min($r['ank']);
     if ($b < $a && $total > 0) $flags[] = "$d: Ankunft ({$r['ank']}) liegt vor der Abfahrt ({$r['abf']}).";

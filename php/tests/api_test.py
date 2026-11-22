@@ -324,7 +324,7 @@ def run(base, app, supa_port):
     check(bool(TOKEN["t"]), "Login nach Umstellung auf neues Passwort-Verfahren")
     i = api(base, "init")
     check(i["fahrzeuge"][0]["id"] == 70 and i["settings"]["entfernung"] == 18, "Fahrzeug-ID 70 + Stammdaten übernommen")
-    check(i["orte"] == [{"ort": "Eugendorf", "km_einfach": 30}], "Orte + km einfach zusammengeführt")
+    check([{k: o[k] for k in ("ort", "km_einfach")} for o in i["orte"]] == [{"ort": "Eugendorf", "km_einfach": 30}], "Orte + km einfach zusammengeführt")
     check(i["hu"][0]["angewendet_am"] is not None, "HU als angewendet markiert")
     y = api(base, "year_get", {"jahr": 2025})
     check(sum(len(v) for v in y["monate"].values()) == 1200, "1.200 Fahrten (mehrere Seiten) übernommen")

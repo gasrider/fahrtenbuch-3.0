@@ -312,7 +312,7 @@ case 'geo_start': {
   $kwOrte = [];
   foreach (jahre_load($n) as $j) { $g = gen_settings_load($n, $j); foreach (keywords_aus_text((string) ($g['keyword_text'] ?? '')) as $k) $kwOrte[] = $k['ort']; }
   foreach (hu_load($n) as $h) $kwOrte = array_merge($kwOrte, [$h['werkstattort']], stopps_liste($h['stopps_vor_hu']), stopps_liste($h['stopps_nach_hu']));
-  foreach (array_merge(array_column(orte_load($n), 'ort'), [$home, $dienst], $kwOrte, array_map('strval', in_arr('zusatz'))) as $o) {
+  foreach (array_merge([$home, $dienst], array_column(orte_load($n), 'ort'), $kwOrte, array_map('strval', in_arr('zusatz'))) as $o) {
     $o = trim($o); $k = norm_ort($o);
     if ($o === '' || isset($seen[$k])) continue;
     $seen[$k] = true; $list[] = $o;
@@ -324,10 +324,13 @@ case 'geo_geocode': {
   $u = require_user(); $n = $u['username'];
   require __DIR__ . '/server/routing.php';
   $res = [];
+  $s = settings_load($n); $hk = norm_ort(ort_clean(trim((string) $s['wohnort'])));
+  $hg = geo_load($n)[$hk] ?? null; $nahe = ($hg && $hg['ok']) ? [$hg['lat'], $hg['lon']] : null;
   foreach (array_slice(in_arr('orte'), 0, 6) as $o) {
     $o = trim((string) $o);
     if ($o === '') continue;
-    $g = geocodiere_ort($o);
+    $g = geocodiere_ort($o, norm_ort($o) === $hk ? null : $nahe);
+    if (norm_ort($o) === $hk && $g) $nahe = [$g['lat'], $g['lon']];
     geo_save($n, $o, $g);
     $res[] = ['ort' => $o, 'ok' => (bool) $g, 'name' => $g['display_name'] ?? ''];
     usleep(GEO_PAUSE_US);

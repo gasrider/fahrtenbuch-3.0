@@ -85,7 +85,9 @@ function zeitraeume_save(string $u, array $rows): int {
 /* ---------- Orte, Distanzen, Distanz-Matrix, Geo-Cache ---------- */
 function orte_load(string $u): array {
   $rows = q('SELECT ort, km_einfach FROM fb_orte WHERE username = ? ORDER BY ort', [$u])->fetchAll();
-  foreach ($rows as &$r) $r['km_einfach'] = $r['km_einfach'] === null ? null : (int) $r['km_einfach'];
+  $geo = [];
+  foreach (q('SELECT ort_key, display_name, ok FROM fb_ort_koordinaten WHERE username = ?', [$u])->fetchAll() as $g) $geo[$g['ort_key']] = (int) $g['ok'] ? (string) $g['display_name'] : 'NICHT GEFUNDEN';
+  foreach ($rows as &$r) { $r['km_einfach'] = $r['km_einfach'] === null ? null : (int) $r['km_einfach']; $r['gefunden'] = $geo[norm_ort($r['ort'])] ?? ''; }
   usort($rows, function ($a, $b) { return strcoll(mb_strtolower($a['ort']), mb_strtolower($b['ort'])); });
   return $rows;
 }

@@ -79,6 +79,19 @@ function chk_user(string $u): array {
     return false;
   };
 
+  // Verdächtige Entfernungen: Orte weit weg vom Wohnort oder außerhalb Österreichs gefunden
+  $weit = [];
+  foreach (matrix_rows($u) as $mr) {
+    $a = norm_ort($mr['ort_a']); $b = norm_ort($mr['ort_b']); $hk = norm_ort($home);
+    if (($a === $hk || $b === $hk) && $mr['km'] > 80) $weit[] = ($a === $hk ? $mr['ort_b'] : $mr['ort_a']) . ' ' . $mr['km'] . ' km';
+  }
+  if ($weit) $add('err', 'Verdächtig weit vom Wohnort (falscher Ort auf der Karte?): ' . implode(', ', $weit) . ' – im Reiter „Fahrzeuge & Orte“ Spalte „gefunden als“ prüfen, Ortsnamen genauer schreiben (z. B. „Kirchberg bei Mattighofen“) und Distanzen neu berechnen');
+  $ausland = [];
+  foreach ($orte as $o) if ($o['gefunden'] !== '' && $o['gefunden'] !== 'NICHT GEFUNDEN' && stripos($o['gefunden'], 'Österreich') === false) $ausland[] = $o['ort'] . ' → ' . mb_substr($o['gefunden'], 0, 60);
+  if ($ausland) $add('err', 'Auf der Karte außerhalb Österreichs gefunden: ' . implode(' | ', $ausland));
+  $nf = array_column(array_filter($orte, function ($o) { return $o['gefunden'] === 'NICHT GEFUNDEN'; }), 'ort');
+  if ($nf) $add('warn', 'Auf der Karte nicht gefunden: ' . implode(', ', $nf));
+
   // Jahre
   $jahre = jahre_load($u);
   $add('info', 'Jahre mit Fahrten: ' . ($jahre ? implode(', ', $jahre) : 'keine'));
