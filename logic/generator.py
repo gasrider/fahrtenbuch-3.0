@@ -11,7 +11,11 @@ Kilometer-Logik v3 (Distanz-Matrix / Online-Karte):
 - Fallback (wenn kein Matrix-Eintrag): Differenz der km-einfach-Werte
   (Tabelle orte_distanz), mindestens MIN_LEG_KM.
 - Ganz ohne Pflege: Zufallswert 15-35 km + Hinweis nach der Generierung.
-Die Monats-Skalierung auf die KM-Ziele bleibt gedämpft (0,80-1,35).
+
+Monats-Ziele v4: Kein Durchschnitt mehr. Jeder Monat wird zufaellig auf
+das Minimum ODER das Maximum der KM-Ziele gesetzt, jeweils +/- 100 km
+auf/ab. Die Skalierung selbst bleibt begrenzt (0,70-1,70), damit echte
+Distanzen nicht plattgerechnet werden.
 """
 from datetime import date, datetime, timedelta
 import calendar
@@ -23,9 +27,12 @@ from logic.helpers import _safe_int
 # Mindest-km pro Teilstrecke zwischen zwei Orten im FALLBACK-Pfad
 # (verhindert 0-km-Fahrten durch gleiche Radial-Werte)
 MIN_LEG_KM = 8
-# Grenzen fuer die Monats-Skalierung (schuetzt die echten Distanzen)
-SCALE_MIN = 0.80
-SCALE_MAX = 1.35
+# Grenzen fuer die Monats-Skalierung (schuetzt die echten Distanzen).
+# v4 weiter geweitet (0,70-1,70), damit die Monate ihre Ziele
+# (Min oder Max +/- 100 km) auch dann erreichen, wenn die Roh-Generierung
+# niedriger liegt (echte Matrix-Distanzen sind kuerzer als Radial-Differenzen).
+SCALE_MIN = 0.70
+SCALE_MAX = 1.70
 
 
 def _time_str(dt):
@@ -202,15 +209,6 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
         raise ValueError(f"Kein Zeitraum deckt das Jahr {jahr} ab! "
                          "Bitte Zeitraeume (von/bis) aktualisieren.")
 
-    month_workday_counts, avg_workdays = {}, 0
-    for mk in monate_liste:
-        tage = pd.date_range(date(jahr, mk, 1), date(jahr, mk, calendar.monthrange(jahr, mk)[1]), freq="D")
-        wd = sum(1 for t in tage if t.weekday() < 5 and t.date() not in hol
-                 and t.date() not in params.get('vacation_days', set()))
-        month_workday_counts[mk] = wd
-        avg_workdays += wd
-    avg_workdays = avg_workdays / len(monate_liste) if monate_liste else 21
-
     vacation_days = params.get('vacation_days', set())
     urlaub_fahrzeug_id = fahrzeug_optionen.get(params.get('urlaub_fahrzeug_name', ''), None)
     haupt_id = fahrzeug_optionen.get(params.get('hauptfahrzeug_name', ''), None)
@@ -227,6 +225,11 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
                              date(jahr, monat_key, calendar.monthrange(jahr, monat_key)[1]), freq="D")
         out = []
         special_trip_done_this_week = False
+        # Start-KM dieses Monats pro Fahrzeug merken - notwendig fuer den
+        # Ketten-Neuaufbau nach der KM-Skalierung (Bugfix: frueher startete
+        # der Neuaufbau beim End-KM des Monats, die Tacho-Kette im Monat
+        # war damit nach oben verschoben)
+        start_km_monat = dict(current_km)
 
         for t in tage:
             route = "Keine Fahrt"; km_d = 0; km_p = 0
@@ -390,31 +393,52 @@ def generiere_monate(jahr, monate_liste, user_info, fahrzeuge_df, zeitraeume_df,
 
         df = pd.DataFrame(out).sort_values(["datum"]).reset_index(drop=True)
 
-        # KM-Skalierung auf Monatsziel - gedämpft (0,80-1,35), damit echte
-        # Distanzen nicht plattgerechnet werden (frueher: 25 km -> 8 km moeglich)
-        target_min = params.get('target_km_min', 1650)
-        target_max = params.get('target_km_max', 2000)
-        if not df.empty and target_max > 0:
+        # Monatsziel v4: MIN oder MAX +/- 100 km (kein Durchschnitt mehr).
+        # Jeder Monat wird zufaellig aufs Minimum oder Maximum gesetzt und
+        # um bis zu 100 km nach oben/unten verschoben. Die Skalierung bleibt
+        # begrenzt (0,70-1,70), damit echte Distanzen nicht plattgerechnet
+        # werden (frueher: 25 km -> 8 km moeglich).
+        t_min = params.get('target_km_min', 1650)
+        t_max = params.get('target_km_max', 2000)
+        if t_min is None: t_min = 1650
+        if t_max is None: t_max = 2000
+        t_min = _safe_int(t_min, 1650)
+        t_max = _safe_int(t_max, 2000)
+        if t_min > t_max:
+            t_min, t_max = t_max, t_min
+        if not df.empty and t_max > 0:
             cur = df["km_d"].sum()
-            if cur > 0 and not (target_min <= cur <= target_max):
-                base = rng.uniform(target_min, target_max)
-                wf = np.clip(month_workday_counts.get(monat_key, 21) / avg_workdays if avg_workdays > 0 else 1.0, 0.70, 1.20)
-                zf = rng.uniform(0.88, 1.12)
-                mt = np.clip(base * wf * zf, target_min * 0.55, target_max * 1.25)
-                sf = float(np.clip(mt / cur, SCALE_MIN, SCALE_MAX))
-                df["km_d"] = df.apply(lambda r: int(r["km_d"] * sf) if r["km_d"] > 0 else 0, axis=1)
-                msk = {fz: km for fz, km in current_km.items()}
-                rows = []
-                for _, row in df.sort_values("datum").iterrows():
-                    fz = row["fahrzeug_id"]
-                    r = row.to_dict()
-                    if fz is not None and fz in msk:
-                        r["abfahrt_km"] = msk[fz]
-                        msk[fz] += _safe_int(r["km_d"]) + _safe_int(r["km_p"])
-                    rows.append(r)
-                df = pd.DataFrame(rows)
-                for fz, km in msk.items():
-                    current_km[fz] = km
+            if cur > 0:
+                # Muenzwurf: dieser Monat wird ein Min-Monat oder ein Max-Monat,
+                # jeweils +/- 100 km auf/ab.
+                ziel_min = max(0, t_min + int(rng.integers(-100, 101)))
+                ziel_max = max(0, t_max + int(rng.integers(-100, 101)))
+                wuerfel_max = bool(rng.random() < 0.5)
+                ziel = ziel_max if wuerfel_max else ziel_min
+                sf = float(np.clip(ziel / cur, SCALE_MIN, SCALE_MAX))
+                # Falls der Deckel das gewuerfelte Ziel unerreichbar macht
+                # (z. B. kurze Monate mit wenigen Werktagen beim Max-Ziel):
+                # auf das andere Ziel ausweichen, damit jeder Monat in einer
+                # der beiden Zonen (Min +/- 100 oder Max +/- 100) landet.
+                if abs(cur * sf - ziel) > 100:
+                    ziel2 = ziel_min if wuerfel_max else ziel_max
+                    sf2 = float(np.clip(ziel2 / cur, SCALE_MIN, SCALE_MAX))
+                    if abs(cur * sf2 - ziel2) < abs(cur * sf - ziel):
+                        ziel, sf = ziel2, sf2
+                if ziel > 0:
+                    df["km_d"] = df.apply(lambda r: int(round(r["km_d"] * sf)) if r["km_d"] > 0 else 0, axis=1)
+                    msk = {fz: km for fz, km in start_km_monat.items()}
+                    rows = []
+                    for _, row in df.sort_values("datum").iterrows():
+                        fz = row["fahrzeug_id"]
+                        r = row.to_dict()
+                        if fz is not None and fz in msk:
+                            r["abfahrt_km"] = msk[fz]
+                            msk[fz] += _safe_int(r["km_d"]) + _safe_int(r["km_p"])
+                        rows.append(r)
+                    df = pd.DataFrame(rows)
+                    for fz, km in msk.items():
+                        current_km[fz] = km
 
         generated[(jahr, monat_key)] = {"data": df,
                                         "end_km": max(current_km.values()) if current_km else 0}
