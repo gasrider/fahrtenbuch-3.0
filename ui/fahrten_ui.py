@@ -32,6 +32,8 @@ from logic.helpers import to_date
 from pdf.monats_pdf import create_monats_pdf
 from pdf.jahres_pdf import create_jahres_pdf
 from logic.constants import MONATE
+from logic.kette import baue_kette_neu
+from ui.fahrten_spalten import FAHRTEN_COLUMN_CONFIG
 
 DEFAULT_KEYWORD_TEXT = (
     "Straßwalchen:Büro\nOberhofen am Irrsee:KB\nStraßwalchen:Schaden,Angebot\n"
@@ -86,21 +88,7 @@ def _jahr_recalc_und_speichern(username, jahr, edited_monat_df, monat_key, fahrz
     edited["datum"] = pd.to_datetime(edited["datum"]).dt.date.astype(str)
     year_data[monat_key] = edited
     anchor = get_or_create_anchor(username, jahr, fahrzeuge_df)
-    km = dict(anchor)
-    for key in sorted(year_data.keys()):
-        dfm = year_data[key].copy().sort_values("datum").reset_index(drop=True)
-        rows = []
-        for _, row in dfm.iterrows():
-            r = row.to_dict()
-            fz = r.get("fahrzeug_id")
-            if fz is not None and not pd.isna(fz):
-                fz = int(fz)
-                r["abfahrt_km"] = km.get(fz, 0)
-                km[fz] = km.get(fz, 0) + _safe_int(r.get("km_d")) + _safe_int(r.get("km_p"))
-            else:
-                r["abfahrt_km"] = 0
-            rows.append(r)
-        year_data[key] = pd.DataFrame(rows)
+    year_data, km = baue_kette_neu(year_data, anchor)
     for key, dfm in year_data.items():
         save_month(username, key[0], key[1], dfm)
     try:
@@ -270,14 +258,7 @@ def render(username):
             urlaub_km_max = st.number_input("Private KM pro Urlaubstag (Max)", 0, 500,
                                             int(saved.get("urlaub_km_max", 80) or 80), 5,
                                             key=f"urlaub_max_{jahr}")
-    st.markdown("**Feinabstimmung für Wochenenden/Feiertage:**")
-    w1, w2 = st.columns(2)
-    with w1:
-        st.slider("Wahrscheinlichkeit für Dienstfahrt am Wochenende/Feiertag (%)", 0, 100, 10,
-                  key=f"pwe_{jahr}")
-    with w2:
-        st.info("Restliche Fahrten sind Privatfahrten.")
-    colA, colB, colC, colD = st.columns(4)
+    colA, colD = st.columns(2)
     with colA:
         m_opts = ["Einzelner Monat", "Ganzes Jahr"]
         if saved.get("modus") == "Ganzes Jahr":
@@ -294,10 +275,6 @@ def render(username):
                                   index=m_std_index, disabled=(modus == "Ganzes Jahr"),
                                   key=f"gen_monat_{jahr}")
         monat = MONATE.index(monat_name) + 1
-    with colB:
-        st.slider("Ø Fahrten pro Woche", 1, 10, 4, key=f"fpw_{jahr}")
-    with colC:
-        st.slider("Ø Privat-KM an Feiertagen/Sonntagen", 10, 500, 50, key=f"pkm_{jahr}")
     with colD:
         prob_werktag = st.slider("Wahrscheinlichkeit Dienstfahrt (Werktag %)", 0, 100,
                                  int(saved.get("prob_werktag", 75) or 75),
@@ -427,30 +404,37 @@ def render(username):
                              "berechnen (oder km einfach pflegen) und dann neu "
                              "generieren.")
             generated, anz_fix = korrigiere_geschwindigkeiten_generated(generated)
-            flags_map = pruefe_alle_monate(generated)
-            st.session_state["pruef_ergebnis"] = {"jahr": jahr, "flags": flags_map, "monate": len(monate_liste)}
-            st.session_state["generated_months_data"] = generated
+            # Neue Monate mit den bereits gespeicherten Monaten des Jahres
+            # zusammenfuehren und die Kilometerkette IMMER ab dem Jahres-Anker
+            # neu aufbauen (Einzelmonat startet damit beim Stand des Vormonats).
+            jahr_daten = {} if modus == "Ganzes Jahr" else dict(year_data)
+            for key, data in generated.items():
+                jahr_daten[key] = data["data"]
+            jahr_daten, current_km = baue_kette_neu(jahr_daten, anchor)
+            flags_map = pruefe_alle_monate(jahr_daten)
+            st.session_state["pruef_ergebnis"] = {"jahr": jahr, "flags": flags_map, "monate": len(jahr_daten)}
+            st.session_state["generated_months_data"] = {k: {"data": v} for k, v in jahr_daten.items()}
             st.session_state["aktuelles_jahr"] = jahr
             st.session_state["aktueller_monat"] = monate_liste[-1]
-            st.session_state["fahrten_df"] = generated[(jahr, monate_liste[-1])]["data"]
+            st.session_state["fahrten_df"] = jahr_daten[(jahr, monate_liste[-1])]
             lines = []
             for _, fz in fahrzeuge_df.iterrows():
                 fz_id = _safe_int(fz['id']) if pd.notna(fz.get('id')) else None
                 if fz_id is not None and fz_id in current_km:
                     lines.append(f"• {fz.get('bezeichnung', '?')}: **{int(current_km[fz_id]):,} km**")
             if lines:
-                st.info("Endkilometerstand pro Fahrzeug:\n" + "\n".join(lines))
+                st.info("Endkilometerstand pro Fahrzeug (31.12.):\n" + "\n".join(lines))
+            try:
+                for key, dfm in jahr_daten.items():
+                    save_month(username, key[0], key[1], dfm)
+                st.toast("Fahrten in der Cloud gespeichert!")
+            except DatabaseError as e:
+                st.error(str(e))
             try:
                 set_start_km(username, jahr + 1, current_km)
                 st.toast(f"Startkilometer fuer {jahr + 1} vorbelegt!")
             except DatabaseError as e:
                 st.warning(f"Startkilometer fuer {jahr + 1}: {e}")
-            try:
-                for key, data in generated.items():
-                    save_month(username, key[0], key[1], data["data"])
-                st.toast("Fahrten in der Cloud gespeichert!")
-            except DatabaseError as e:
-                st.error(str(e))
             st.success(f"Fahrten für {len(monate_liste)} Monat(e) generiert und unter {jahr} abgelegt.")
         except ValueError as e:
             st.error(f"⚠️ {e}")
@@ -510,8 +494,15 @@ def render(username):
         st.subheader("Fahrten anpassen & manuell hinzufuegen")
         st.caption("Beim Speichern werden ALLE Kilometerstaende des Jahres neu berechnet und geprueft.")
         editor_key = f"edit_fahrten_{jahr}_{monat_view}"
-        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True,
-                                   key=editor_key)
+        df_anzeige = df.copy()
+        if "datum" in df_anzeige.columns:
+            df_anzeige["datum"] = pd.to_datetime(df_anzeige["datum"], errors="coerce").dt.date
+        spalten_cfg = dict(FAHRTEN_COLUMN_CONFIG)
+        for techn in ("id", "username", "jahr", "monat", "created_at"):
+            if techn in df_anzeige.columns:
+                spalten_cfg[techn] = None
+        edited_df = st.data_editor(df_anzeige, num_rows="dynamic", use_container_width=True,
+                                   column_config=spalten_cfg, key=editor_key)
         col_save, col_add = st.columns([1, 1])
         with col_save:
             if st.button("Aenderungen speichern (Kilometer + Pruefung automatisch)"):
@@ -553,10 +544,10 @@ def render(username):
                     dauer_str = dauer_string(new_abf, new_ank)
                     fz_row = fahrzeuge_df[fahrzeuge_df['bezeichnung'] == new_fzg]
                     if not fz_row.empty:
-                        fz_id = _safe_int(fz_row['id'].values[0])
+                        fz_id = _safe_int(fz_row['id'].values[0], default=None)
                     else:
-                        fz_id = 1
-                    new_row = {"datum": new_date, "fahrzeug_id": int(fz_id), "fahrzeug": new_fzg,
+                        fz_id = None
+                    new_row = {"datum": new_date, "fahrzeug_id": fz_id, "fahrzeug": new_fzg,
                                "route": new_route, "km_d": int(new_km_d), "km_p": int(new_km_p),
                                "abf": new_abf, "ank": new_ank, "dauer": dauer_str, "abfahrt_km": 0}
                     new_df = pd.concat([edited_df, pd.DataFrame([new_row])], ignore_index=True)

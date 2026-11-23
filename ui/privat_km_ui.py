@@ -35,7 +35,8 @@ def render(username):
         jahre = []
     heute = date.today().year
     optionen = sorted(set(jahre) | set(range(heute - 10, heute + 3)))
-    jahr = int(st.selectbox("Jahr", optionen, index=len(optionen) - 1,
+    standard = max(jahre) if jahre else heute
+    jahr = int(st.selectbox("Jahr", optionen, index=optionen.index(standard),
                             key="pkm_jahr"))
 
     fzg_liste = []

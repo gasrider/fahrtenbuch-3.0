@@ -1,68 +1,57 @@
-Fahrtenbuch Generator v7.0 (Multi-User)
+# Fahrtenbuch 3.0 (Multi-User)
 
-Fahrtenbuch-App mit Login, Fahrzeugverwaltung, Monatserfassung,Plausibilitätsprüfung und PDF-Export (Monat/Jahr). Daten liegen in Supabase.
+Fahrtenbuch-App mit Fahrten-Generator, lückenloser Kilometerkette,
+Plausibilitätsprüfung, HU-Korrektur, Privat-KM-Verteilung, Taggeld und
+PDF-Export (Monat + Jahr). Läuft komplett online:
 
+| Teil | Dienst |
+|---|---|
+| Code | GitHub (`main`) |
+| App | Streamlit Cloud – baut nach jedem Commit automatisch neu |
+| Daten | Supabase (Postgres) |
 
+## Einrichtung
 
-Starten (ohne Terminal!)
+**Streamlit Cloud → App → Settings → Secrets:**
 
-Doppelklick auf Start\_Fahrtenbuch.bat – der Browser öffnet die Appautomatisch unter http://localhost:8501.Beim allerersten Start werden Pakete installiert (dauert 1–2 Minuten).
+```
+SUPABASE_URL = "https://<projekt>.supabase.co"
+SUPABASE_KEY = "<service_role-key>"
+INVITE_CODE  = "<Code für neue Registrierungen>"   # optional
+ADMIN_USERNAMES = "name1,name2"                    # optional
+```
 
+**GitHub → Settings → Secrets and variables → Actions:** `SUPABASE_KEY`
+(gleicher Wert) – für den Keep-Alive-Workflow
+(`.github/workflows/keepalive.yml`), der das Supabase-Free-Projekt wach hält.
 
+## Ablauf in der App
 
-Beenden: Browser-Tab schließen + im schwarzen Fenster "Strg+C" drückenoder Fenster schließen.
+1. **Stammdaten** – Name, Wohnort, Dienstort, Entfernung, Taggeld-Sätze
+2. **Fahrzeuge & Orte** – Fahrzeuge, Nutzungszeiträume, Orte; Distanzen online berechnen
+3. **Generator** – Jahr wählen, Eckdaten einstellen, generieren, Fahrten bearbeiten
+4. **Privat-KM verteilen** – Jahressumme privat auf das Jahr verteilen
+5. **Plausibilitätsprüfung** – Auffälligkeiten ansehen und korrigieren
+6. **Export & HU** – PDFs erzeugen, HU-Stände eintragen und einmalig anwenden
 
+Jede Änderung an Fahrten baut die Kilometerkette des ganzen Jahres neu auf –
+immer ab dem gesperrten Jahres-Startwert (Tabelle `jahres_start_km`).
 
+## Projektstruktur
 
-Einmalige Einrichtung
+```
+app.py        Einstieg
+config.py     Supabase-Verbindung (Secrets)
+database/     Lesen/Speichern in Supabase
+logic/        Generator, Kilometerkette (kette.py), HU, Privat-KM, Taggeld, Prüfung
+services/     E-Mail (SMTP), Online-Distanzen (OpenStreetMap/OSRM)
+pdf/          Monats- und Jahres-PDF
+ui/           Bildschirmseiten (Tabs)
+```
 
-Python installieren (python.org, Häkchen "Add Python to PATH" setzen)
+## Supabase-Tabellen
 
-Datei .env anlegen mit folgendem Inhalt:SUPABASE\_URL=https://xxxxx.supabase.coSUPABASE\_KEY=dein-key
-
-Tests
-
-Optional: Doppelklick auf Test ausführen.bat (prüft die Berechnungslogik)
-
-
-
-Benötigte Supabase-Tabellen
-
-users(username, password, email, force\_pw\_change)
-
-settings(username, name, pnr, wohnort, dienstort, entfernung,taggeld\_min\_stunden, taggeld\_basis, taggeld\_stufung,taggeld\_max\_betrag, taggeld\_max\_stunden, km\_geld)
-
-fahrzeuge(id, username, bezeichnung, kennzeichen, start\_km\_vorjahr,privat\_km\_min, privat\_km\_max, dienstlich\_quote)
-
-zeitraeume(id, username, fahrzeug\_id, von, bis)
-
-fahrten(id, username, jahr, monat, datum, fahrzeug\_id, fahrzeug, route,km\_d, km\_p, abf, ank, dauer, abfahrt\_km)
-
-hu\_corrections(id, username, fahrzeug\_id, datum, km\_at\_hu, werkstattort,stopps\_vor\_hu, stopps\_nach\_hu)
-
-system\_config(id, smtp\_server, smtp\_port, smtp\_user, smtp\_password,smtp\_from\_name)
-
-Projektstruktur (wo finde ich was?)
-
-config.py .............. Supabase-Verbindung
-
-database/ .............. Alle Datenbank-Zugriffe (Laden/Speichern)
-
-logic/ ................. Berechnungen (Taggeld, Feiertage, Prüfung)
-
-services/email.py ...... Passwort-Reset-Mail
-
-pdf/ ................... PDF-Erzeugung
-
-ui/ .................... Bildschirmseiten (Login, Tabs)
-
-tests/ ................. Automatische Tests
-
-Wichtige Hinweise
-
-Passwort-Reset benötigt SMTP-Einstellungen (Tabelle system\_config,Zeile id=1) oder Umgebungsvariablen.
-
-Die "Arbeitstage-Vorlage" ist nur ein Starting Point – Zeiten/KM müssenvor dem Speichern mit den realen Fahrten abgeglichen werden.
-
-Die automatische KM-Verteilung aus der alten Version wurde entfernt.
-
+users, settings, fahrzeuge, zeitraeume, fahrten, hu_corrections, orte,
+orte_distanz, ort_koordinaten, distanz_matrix, jahres_start_km,
+generation_settings, system_config. RLS ist deaktiviert – Zugriff nur über
+den `service_role`-Key in den Streamlit Secrets.

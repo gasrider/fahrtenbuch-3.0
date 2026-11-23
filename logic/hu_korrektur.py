@@ -45,12 +45,31 @@ def _recalc_ankunft(row):
         return str(row.get('ank', '08:00'))
 
 
-def _skaliere(df, factor):
-    if df is None or df.empty or factor == 1.0:
+def _skaliere(df, factor, ziel=None):
+    """km_d/km_p mit factor skalieren. Ist ziel (Summe km_d + km_p)
+    angegeben, wird der Rundungsrest danach km-genau auf die Dienstfahrten
+    verteilt - sonst summieren sich die Abrundungen pro Fahrt auf
+    (z. B. 30+ km Abweichung vom HU-Stand)."""
+    if df is None or df.empty or (factor == 1.0 and ziel is None):
         return df
     df = df.copy()
-    df['km_d'] = (df['km_d'] * factor).astype(int)
-    df['km_p'] = (df['km_p'] * factor).astype(int)
+    df['km_d'] = (df['km_d'].astype(float) * factor).round().astype(int)
+    df['km_p'] = (df['km_p'].astype(float) * factor).round().astype(int)
+    if ziel is not None:
+        diff = int(ziel) - int(df['km_d'].sum() + df['km_p'].sum())
+        kandidaten = list(df[df['km_d'] > 0].sort_values('km_d', ascending=False).index)
+        guard = 0
+        while diff != 0 and kandidaten and guard < 100000:
+            for idx in kandidaten:
+                if diff == 0:
+                    break
+                if diff > 0:
+                    df.at[idx, 'km_d'] += 1
+                    diff -= 1
+                elif df.at[idx, 'km_d'] > 1:
+                    df.at[idx, 'km_d'] -= 1
+                    diff += 1
+            guard += 1
     df['dauer'] = df['dauer'].apply(lambda d: _scale_dauer(d, factor))
     df['ank'] = df.apply(_recalc_ankunft, axis=1)
     return df
@@ -221,6 +240,14 @@ def wende_hu_korrekturen_an(generated_months_data, fahrzeuge_df, corrections,
         am_tag = trips[trips['datum'] == hu_date].copy()
         nach = trips[trips['datum'] > hu_date].copy()
 
+        # Schutz gegen Doppel-Ausfuehrung: Ist am HU-Tag schon eine
+        # HU-Fahrt eingetragen, wurde diese HU bereits angewendet. Eine
+        # zweite Skalierung wuerde die Kilometer kumulativ verfaelschen.
+        if am_tag['route'].astype(str).str.contains("(HU)", regex=False).any():
+            meldungen.append("- Bereits angewendet (HU-Fahrt am HU-Tag vorhanden) - "
+                             "uebersprungen, Kilometer bleiben unveraendert.")
+            continue
+
         sum_vor = _safe_int(vor['km_d'].sum()) + _safe_int(vor['km_p'].sum())
         sum_nach = _safe_int(nach['km_d'].sum()) + _safe_int(nach['km_p'].sum())
         sum_tag = _safe_int(am_tag['km_d'].sum()) + _safe_int(am_tag['km_p'].sum())
@@ -256,8 +283,10 @@ def wende_hu_korrekturen_an(generated_months_data, fahrzeuge_df, corrections,
         meldungen.append(f"- Faktor vor HU: {fv:.3f} | nach HU: {fn:.3f} "
                          "(Jahressumme bleibt erhalten)")
 
-        vor_s = _skaliere(vor, fv)
-        nach_s = _skaliere(nach, fn)
+        # Nur wenn der Faktor nicht gedeckelt wurde, ist das Ziel erreichbar
+        # -> dann km-genau (Tacho bei Ankunft Werkstatt = exakt HU-Stand).
+        vor_s = _skaliere(vor, fv, ziel_vor if (fv == faktor_vor and ziel_vor > 0 and sum_vor > 0) else None)
+        nach_s = _skaliere(nach, fn, ziel_nach if (fn == faktor_nach and ziel_nach > 0 and sum_nach > 0) else None)
         werte = {}
         for _, r in vor_s.iterrows():
             werte[r['datum']] = r

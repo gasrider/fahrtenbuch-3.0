@@ -18,7 +18,8 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 from logic.constants import MONATE
 from logic.helpers import _safe_dauer_min, _safe_int
-from logic.taggeld import berechne_taggeld
+from logic.taggeld import berechne_taggeld, taggeld_params_aus_settings
+from logic.helpers import _safe_float
 
 
 def create_monats_pdf(df, monat, jahr, user_info, fahrzeuge_df):
@@ -69,13 +70,7 @@ def create_monats_pdf(df, monat, jahr, user_info, fahrzeuge_df):
     data = [headers, sub_headers]
 
     # Taggeld-Parameter fuer den Monat
-    taggeld_params = {
-        'min_stunden': user_info.get('taggeld_min_stunden', 5),
-        'basis': user_info.get('taggeld_basis', 10.00),
-        'stufung': user_info.get('taggeld_stufung', 2.50),
-        'max_betrag': user_info.get('taggeld_max_betrag', 30.00),
-        'max_stunden': user_info.get('taggeld_max_stunden', 13),
-    }
+    taggeld_params = taggeld_params_aus_settings(user_info or {})
 
     german_day_abbr = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
     for _, r in df.iterrows():
@@ -94,8 +89,8 @@ def create_monats_pdf(df, monat, jahr, user_info, fahrzeuge_df):
 
         data.append([tag, str(r.get("abf", "00:00")), str(r.get("ank", "00:00")), str(r.get("dauer", "00:00")), route_para, _safe_int(r.get("abfahrt_km")), km_d_wert, _safe_int(r.get("km_p")), taggeld_text, str(r.get("fahrzeug", ""))])
 
-    sum_dienstl = int(df["km_d"].sum())
-    sum_privat = int(df["km_p"].sum())
+    sum_dienstl = int(pd.to_numeric(df["km_d"], errors="coerce").fillna(0).sum())
+    sum_privat = int(pd.to_numeric(df["km_p"], errors="coerce").fillna(0).sum())
 
     # TAGGELD-FIX: Summe nur ueber echte Dienstfahrten (km_d > 0)
     sum_taggeld = 0.0
@@ -119,7 +114,7 @@ def create_monats_pdf(df, monat, jahr, user_info, fahrzeuge_df):
     story.append(table)
     story.append(Spacer(1, 5 * mm))
 
-    km_satz = float(user_info.get('km_geld', 0.42))
+    km_satz = _safe_float(user_info.get('km_geld'), 0.42)
     notes = [
         "Privat-KM beinhalten die Fahrtstrecke Wohnung-Arbeitsplatz.",
         f"km-Geld Satz PKW amtlich: EUR {km_satz:.2f}".replace('.', ',')]

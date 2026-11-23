@@ -70,9 +70,21 @@ def load_year(username, jahr) -> dict:
 def load_verfuegbare_jahre(username) -> list:
     """Alle Jahre, für die Fahrten gespeichert sind (für die Jahres-Auswahl)."""
     try:
-        r = (supabase.table("fahrten").select("jahr")
-             .eq("username", username).execute())
-        return sorted({int(row["jahr"]) for row in (r.data or [])})
+        # Supabase liefert max. 1000 Zeilen pro Abfrage -> seitenweise lesen,
+        # sonst fehlen ab ca. 3 Jahren Fahrten ganze Jahre in der Auswahl.
+        jahre = set()
+        start = 0
+        seite = 1000
+        while True:
+            r = (supabase.table("fahrten").select("jahr")
+                 .eq("username", username).order("jahr")
+                 .range(start, start + seite - 1).execute())
+            daten = r.data or []
+            jahre.update(int(row["jahr"]) for row in daten)
+            if len(daten) < seite:
+                break
+            start += seite
+        return sorted(jahre)
     except Exception as e:
         raise DatabaseError(f"Verfügbare Jahre laden fehlgeschlagen: {e}") from e
 

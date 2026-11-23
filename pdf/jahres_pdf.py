@@ -16,18 +16,13 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 from logic.constants import MONATE
 from logic.helpers import _safe_dauer_min, _safe_int
-from logic.taggeld import berechne_taggeld_betrag
+from logic.taggeld import berechne_taggeld_betrag, taggeld_params_aus_settings
+from logic.helpers import _safe_float
 
 
 def _taggeld_params(user_info):
     """Taggeld-Parameter aus den User-Einstellungen lesen."""
-    return {
-        "min_stunden": user_info.get("taggeld_min_stunden", 5),
-        "basis": user_info.get("taggeld_basis", 10.00),
-        "stufung": user_info.get("taggeld_stufung", 2.50),
-        "max_betrag": user_info.get("taggeld_max_betrag", 30.00),
-        "max_stunden": user_info.get("taggeld_max_stunden", 13),
-    }
+    return taggeld_params_aus_settings(user_info or {})
 
 
 def _monats_taggeld(df, taggeld_params):
@@ -83,7 +78,7 @@ def create_jahres_pdf(generated_data, jahr, user_info, fahrzeuge_df):
     header_row2 = ["Monat", "dienstl.", "privat", "PKW", "EUR"]
     data = [header_row1, header_row2]
 
-    km_geld_satz = float(user_info.get('km_geld', 0.42))
+    km_geld_satz = _safe_float(user_info.get('km_geld'), 0.42)
     total_dienstl = 0
     total_privat = 0
     total_km_geld = 0
@@ -98,8 +93,8 @@ def create_jahres_pdf(generated_data, jahr, user_info, fahrzeuge_df):
                 data.append([monat_name, 0, 0, "0,00", "0,00"])
                 continue
 
-            sum_dienstl = int(df["km_d"].sum())
-            sum_privat = int(df["km_p"].sum())
+            sum_dienstl = int(pd.to_numeric(df["km_d"], errors="coerce").fillna(0).sum())
+            sum_privat = int(pd.to_numeric(df["km_p"], errors="coerce").fillna(0).sum())
 
             # TAGGELD-FIX: nur Tage mit echter Dienstfahrt (km_d > 0) zaehlen
             sum_taggeld = _monats_taggeld(df, taggeld_params)

@@ -5,7 +5,7 @@ import streamlit as st
 
 from database import DatabaseError
 from database.users import (add_user, verify_user, update_password,
-                            reset_password_by_username)
+                            reset_password_by_username, get_user_email)
 from services.email import send_reset_email
 
 
@@ -85,6 +85,8 @@ def render_login():
         if st.button("Account erstellen", disabled=not code_cfg):
             if not ne or "@" not in ne:
                 st.error("Bitte geben Sie eine gültige E-Mail-Adresse an.")
+            elif not nu.strip() or len(np1) < 4:
+                st.error("Bitte Benutzernamen und ein Passwort (mind. 4 Zeichen) angeben.")
             elif einladung.strip() != code_cfg:
                 st.error("Der Einladungs-Code ist falsch. Bitte beim Admin nachfragen.")
             else:
@@ -103,13 +105,22 @@ def render_login():
                 st.warning("Bitte Benutzernamen eingeben.")
             else:
                 try:
-                    new_pw = secrets.token_urlsafe(8)
-                    email = reset_password_by_username(ru, new_pw)
-                    if send_reset_email(email, new_pw):
-                        st.success("Ein neues Passwort wurde an Ihre E-Mail-Adresse "
-                                   "gesendet! Bitte prüfen Sie auch Ihren Spam-Ordner.")
+                    email = get_user_email(ru)
+                    if not email:
+                        st.error("Für diesen Account ist keine E-Mail hinterlegt. "
+                                 "Bitte den Admin kontaktieren.")
                     else:
-                        st.error("Fehler beim Senden der E-Mail. "
-                                 "Bitte kontaktieren Sie den Admin.")
+                        new_pw = secrets.token_urlsafe(8)
+                        # Erst senden, DANN das Passwort aendern - schlaegt der
+                        # Versand fehl, bleibt das alte Passwort gueltig
+                        # (sonst sperrt man sich bei SMTP-Problemen aus).
+                        if send_reset_email(email, new_pw):
+                            reset_password_by_username(ru, new_pw)
+                            st.success("Ein neues Passwort wurde an Ihre E-Mail-Adresse "
+                                       "gesendet! Bitte prüfen Sie auch Ihren Spam-Ordner.")
+                        else:
+                            st.error("Die E-Mail konnte nicht gesendet werden - Ihr "
+                                     "bisheriges Passwort bleibt gültig. Bitte den "
+                                     "Admin kontaktieren.")
                 except DatabaseError as e:
                     st.error(str(e))

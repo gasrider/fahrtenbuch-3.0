@@ -1,0 +1,35 @@
+# Haelt das Supabase-Free-Projekt und die Streamlit-App wach.
+# Supabase pausiert Free-Projekte nach 7 Tagen ohne Datenbank-Zugriff.
+# Laeuft Mo/Mi/Fr um 07:00 UTC und kann im Tab "Actions" auch per
+# "Run workflow" manuell gestartet werden.
+#
+# Einmalig noetig: GitHub -> Settings -> Secrets and variables -> Actions
+#   -> "New repository secret": Name SUPABASE_KEY, Wert = derselbe Key wie
+#   in den Streamlit Secrets.
+name: Keep-Alive
+
+on:
+  schedule:
+    - cron: "0 7 * * 1,3,5"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Supabase-Datenbank abfragen
+        env:
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_KEY" ]; then
+            echo "::error::GitHub-Secret SUPABASE_KEY fehlt - siehe Kommentar oben in dieser Datei."
+            exit 1
+          fi
+          curl -sS --fail --retry 3 --retry-delay 10 -o /dev/null -w "Supabase HTTP %{http_code}\n" \
+            -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $SUPABASE_KEY" \
+            "https://slwcirzmjuchdqzwckky.supabase.co/rest/v1/system_config?select=id&limit=1"
+
+      - name: Streamlit-App aufrufen
+        run: |
+          curl -sS -L --retry 3 --retry-delay 10 -o /dev/null -w "App HTTP %{http_code}\n" \
+            "https://fahrtenbuch-30-ean6qnkogye5t6fabkfwfj.streamlit.app/" || true

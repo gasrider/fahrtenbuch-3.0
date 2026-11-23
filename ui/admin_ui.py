@@ -99,9 +99,12 @@ def _zeige_benutzer(username):
     new_pw = st.text_input("Neues Passwort", type="password", key="admin_pw")
     if st.button("Passwort aendern"):
         if new_pw:
-            update_password(sel, new_pw, force_change=True)
-            st.success(f"Passwort fuer {sel} geaendert. User muss bei naechstem "
-                       "Login ein neues Passwort setzen.")
+            try:
+                update_password(sel, new_pw, force_change=True)
+                st.success(f"Passwort fuer {sel} geaendert. User muss bei naechstem "
+                           "Login ein neues Passwort setzen.")
+            except DatabaseError as e:
+                st.error(str(e))
         else:
             st.warning("Bitte ein Passwort eingeben.")
     st.markdown("---")
@@ -114,8 +117,11 @@ def _zeige_benutzer(username):
     mail = st.text_input("E-Mail eintragen/aendern", value=cur, key="admin_mail")
     if st.button("E-Mail speichern"):
         if mail and "@" in mail:
-            set_user_email(sel, mail)
-            st.success("E-Mail gespeichert.")
+            try:
+                set_user_email(sel, mail)
+                st.success("E-Mail gespeichert.")
+            except DatabaseError as e:
+                st.error(str(e))
         else:
             st.error("Bitte eine gueltige E-Mail-Adresse eingeben.")
 

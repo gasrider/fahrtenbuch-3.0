@@ -123,7 +123,8 @@ def render(username):
 
     st.markdown("---")
     st.subheader("Fahrten an HU anpassen")
-    st.warning("Nur EINMAL pro HU ausfuehren! Kilometer vor dem HU-Datum werden auf "
+    st.info("Eine HU wird nur EINMAL angewendet - ist am HU-Tag schon eine "
+            "HU-Fahrt eingetragen, wird sie automatisch uebersprungen. Kilometer vor dem HU-Datum werden auf "
                "den HU-Stand skaliert (Tacho bei Ankunft Werkstatt = exakt der "
                "eingegebene HU-Stand), danach kompensierend (Jahressumme bleibt "
                "erhalten) und eine Werkstatt-Fahrt mit privatem Weg zur Werkstatt "
@@ -149,36 +150,37 @@ def render(username):
             st.error("Keine gueltigen Eintraege (Fahrzeug, Datum, Werkstattort pruefen).")
             return
         try:
-            jahre = sorted({int(d["datum"][:4]) for d in daten})
-            gen = {}
-            for j in jahre:
-                for (jj, mm), dfm in load_year(username, j).items():
-                    gen[(jj, mm)] = {"data": dfm}
-            if not gen:
-                st.info("Keine gespeicherten Fahrten gefunden - zuerst im Generator "
-                        "generieren.")
-                return
             settings = load_settings(username)
             distanzen = lade_distanzen(username)
             try:
                 matrix = lade_distanz_matrix(username)
             except DatabaseError:
                 matrix = {}
-            jahr_ref = jahre[0]
-            anchor_hu = get_or_create_anchor(username, jahr_ref, fahrzeuge)
-            fzg_hu = fahrzeuge.copy()
-            fzg_hu["start_km_vorjahr"] = fzg_hu["id"].map(
-                lambda x: anchor_hu.get(int(x)) if pd.notna(x) else None)
-            with st.spinner("Wende HU-Korrekturen an..."):
-                gen, km_ende, meldungen = wende_hu_korrekturen_an(
-                    gen, fzg_hu, daten, pd.DataFrame(columns=["Ort", "Zweck"]),
-                    settings.get("wohnort", ""), distanzen, matrix)
-                for m in meldungen:
-                    st.write(m)
-                for (j, m), d in gen.items():
-                    save_month(username, j, m, d["data"])
-                for j in jahre:
+            jahre = sorted({int(d["datum"][:4]) for d in daten})
+            bearbeitet = 0
+            # Jahr fuer Jahr - jedes Jahr startet an SEINEM Jahres-Anker
+            for j in jahre:
+                gen = {k: {"data": dfm} for k, dfm in load_year(username, j).items()}
+                if not gen:
+                    st.info(f"{j}: keine gespeicherten Fahrten - zuerst im "
+                            "Generator generieren.")
+                    continue
+                anchor_hu = get_or_create_anchor(username, j, fahrzeuge)
+                fzg_hu = fahrzeuge.copy()
+                fzg_hu["start_km_vorjahr"] = fzg_hu["id"].map(
+                    lambda x: anchor_hu.get(int(x)) if pd.notna(x) else None)
+                daten_j = [d for d in daten if int(d["datum"][:4]) == j]
+                with st.spinner(f"Wende HU-Korrekturen {j} an..."):
+                    gen, km_ende, meldungen = wende_hu_korrekturen_an(
+                        gen, fzg_hu, daten_j, pd.DataFrame(columns=["Ort", "Zweck"]),
+                        settings.get("wohnort", ""), distanzen, matrix)
+                    for m in meldungen:
+                        st.write(m)
+                    for (jj, mm), d in gen.items():
+                        save_month(username, jj, mm, d["data"])
                     set_start_km(username, j + 1, km_ende)
-            st.success("Fahrten angepasst. Folgejahres-Startwerte gespeichert!")
+                bearbeitet += 1
+            if bearbeitet:
+                st.success("Fahrten angepasst. Folgejahres-Startwerte gespeichert!")
         except DatabaseError as e:
             st.error(str(e))
