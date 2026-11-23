@@ -1,0 +1,32 @@
+# Fahrtenbuch (PHP-Version) – Projektkontext
+
+Nachfolger der Streamlit-App (Python im Repo-Wurzelverzeichnis). Läuft auf World4You-Webhosting (PHP 8 + MySQL), Aufbau wie das Notizbuch (`gasrider/Notizbuch`).
+Betreiber: Christian (Admin, kein Entwickler, nur WebFTP im Browser). Nutzertexte Deutsch (Österreich), du-Form.
+
+## Aufbau
+```
+app/                     ← wird 1:1 auf den Server gespielt (Ordner /fahrtenbuch)
+  index.html             ← komplette Oberfläche (Vanilla-JS, kein Build). Tabs: Stammdaten, Generator, Fahrzeuge & Orte, Privat-KM, Prüfung, Export & HU, Admin
+  api.php                ← JSON-API (?action=…), Token im Header X-Auth-Token
+  server/lib.php         ← DB (Tabellen fb_*), Login, Einstellungen, Mail (SMTP / PHP / Microsoft Graph)
+  server/logic.php       ← Fachlogik, 1:1 aus Python: Generator v5, baue_kette_neu, Prüfung, Taggeld, HU (Doppelschutz, km-genau), Privat-KM
+  server/import.php      ← xlsx/csv-Leser (ZipArchive) + Import-Normalisierung
+  server/pdf.php         ← Monats-/Jahres-PDF (FPDF 1.9, server/fpdf.php + font/)
+  server/config.php      ← Vorlage; produktiv vom Installer erzeugt, NIE im Paket
+build/make_installer.py  ← packt app/ in dist/installieren.php
+tests/e2e.py             ← Installation + Supabase-Übernahme (Fake) + alle Funktionen (braucht php, MariaDB)
+tests/ui.mjs             ← Playwright gegen laufende Instanz (KEEP=1 python3 tests/e2e.py)
+```
+
+## Regeln (aus dem Projektverlauf)
+- Kilometerkette nach JEDER Änderung über `baue_kette_neu()` ab dem Jahres-Anker (`fb_start_km`), danach Startwert `jahr+1` setzen.
+- Fahrzeug-IDs stabil (69/70/71): Update statt Delete+Insert, Excel-IDs ignorieren, Zuordnung über Bezeichnung.
+- HU nur einmal: Tag mit „(HU)“-Route wird übersprungen.
+- Taggeld nur bei km_d > 0.
+- Passwort vergessen: erst Mail senden, dann Passwort ändern.
+- Alte Streamlit-Passwörter: `sha256:<hex>` in fb_users.pass_hash, beim Login auf password_hash umgestellt.
+- Schema-Änderungen idempotent in `create_schema()` (läuft auch beim Update).
+
+## Definition of Done
+`php -l` auf allen PHP-Dateien, JS-Check (`sed -n '/^<script>$/,/^<\/script>$/p' app/index.html | sed '1d;$d' > /tmp/a.js && node --check /tmp/a.js`),
+`python3 tests/e2e.py` grün, `tests/ui.mjs` grün, `sw.js`-CACHE hochzählen, `python3 build/make_installer.py`.

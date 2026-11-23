@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Fahrtenbuch</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#eef0f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1220" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --bg:#eef0f6;--surface:#fff;--sunk:#e4e7f1;--ink:#151a33;--muted:#5d6482;--line:#d7dbe8;
+  --accent:#2b3fd1;--accent-ink:#fff;--accent-soft:#e2e6ff;--ok:#1d8a5a;--warn:#c2410c;--hi:#c8283a;--okbg:#e3f5ec;--warnbg:#fff1e6;--hibg:#fde8ea;
+  --display:"Bricolage Grotesque","Avenir Next",system-ui,sans-serif;--body:"Figtree",-apple-system,"Segoe UI",system-ui,sans-serif;--r:14px;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f1220;--surface:#181c30;--sunk:#12162a;--ink:#e9ecfa;--muted:#9aa1c2;--line:#2b3150;
+  --accent:#8c9bff;--accent-ink:#0f1220;--accent-soft:#252c55;--ok:#4cc38a;--warn:#f59e5b;--hi:#f07a84;--okbg:#15301f;--warnbg:#33210f;--hibg:#3a1820;color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{min-height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.45;-webkit-text-size-adjust:100%}
+[hidden]{display:none!important}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1240px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-left)) 60px}
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 0 0;border-bottom:1px solid var(--line)}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+h1{font-family:var(--display);font-weight:800;font-size:1.55rem;letter-spacing:-.02em;margin:0}
+h1 small{display:block;font-family:var(--body);font-weight:600;font-size:.7rem;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.who{display:flex;gap:8px;align-items:center;font-size:.85rem;color:var(--muted)}
+nav{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;margin-top:10px}
+nav::-webkit-scrollbar{display:none}
+nav button{border:0;background:none;padding:9px 12px;font-weight:600;color:var(--muted);border-bottom:3px solid transparent;white-space:nowrap}
+nav button[aria-current="page"]{color:var(--ink);border-bottom-color:var(--accent)}
+h2{font-family:var(--display);font-weight:800;font-size:1.2rem;margin:0;letter-spacing:-.01em}
+h3{font-family:var(--display);font-weight:600;font-size:1.02rem;margin:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:grid;gap:12px;min-width:0;margin-top:16px}
+.row{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 14px}
+label.f{display:grid;gap:4px;font-size:.8rem;font-weight:700;color:var(--muted);min-width:0}
+label.f small{font-weight:400}
+input,select,textarea{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:8px 10px;font-size:15px;min-width:0;width:100%}
+input[type=checkbox],input[type=radio]{width:auto}
+input[type=range]{padding:0;accent-color:var(--accent)}
+textarea{min-height:180px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.chk{display:flex;gap:8px;align-items:center;font-weight:600;font-size:.9rem}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:9px 14px;font-weight:700;white-space:nowrap}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.danger{color:var(--hi);border-color:color-mix(in srgb,var(--hi) 45%,var(--line))}
+.btn.danger.arm{background:var(--hi);color:#fff}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.sm{padding:5px 10px;font-size:.85rem}
+.hint{font-size:.83rem;color:var(--muted);margin:0}
+.msg{border-radius:10px;padding:10px 12px;font-size:.9rem;white-space:pre-line}
+.msg.ok{background:var(--okbg)} .msg.warn{background:var(--warnbg)} .msg.err{background:var(--hibg)} .msg.info{background:var(--accent-soft)}
+details{border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:var(--surface)}
+details summary{cursor:pointer;font-weight:600}
+.tbl{overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:70vh}
+table{border-collapse:collapse;width:100%;font-size:.86rem}
+th{position:sticky;top:0;background:var(--sunk);text-align:left;padding:6px 8px;font-size:.76rem;color:var(--muted);white-space:nowrap;z-index:1}
+td{border-top:1px solid var(--line);padding:2px 4px;vertical-align:middle}
+td input,td select{border:1px solid transparent;border-radius:6px;padding:5px 6px;font-size:.86rem;background:transparent}
+td input:hover,td select:hover{border-color:var(--line)}
+td input:focus,td select:focus{border-color:var(--accent);background:var(--surface)}
+td input[readonly]{color:var(--muted)}
+td.ro{color:var(--muted);padding:5px 8px;white-space:nowrap;font-variant-numeric:tabular-nums}
+td.x{width:32px;text-align:center}
+td.x button{border:0;background:none;color:var(--muted);font-size:1rem;padding:4px}
+tr.del td{opacity:.35;text-decoration:line-through}
+tr.we td.ro:first-child{color:var(--warn)}
+.num input{text-align:right;font-variant-numeric:tabular-nums}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.stat{background:var(--sunk);border-radius:10px;padding:8px 12px}
+.stat b{display:block;font-family:var(--display);font-size:1.25rem;font-variant-numeric:tabular-nums}
+.stat span{font-size:.75rem;color:var(--muted);font-weight:600}
+.prog{height:8px;border-radius:9px;background:var(--sunk);overflow:hidden}
+.prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+.login{max-width:400px;margin:8vh auto;padding:0 16px}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:600;z-index:20;max-width:90vw}
+.loading{opacity:.55;pointer-events:none}
+@media (max-width:640px){h1{font-size:1.3rem}.card{padding:12px}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+'use strict';
+/* ================= Helfer ================= */
+const $root = document.getElementById('root');
+const MONATE = ['Jänner','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+const WT = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+const S = { auth: null, tab: 'gen', jahr: null };
+try { S.auth = JSON.parse(localStorage.getItem('fb.auth') || 'null'); S.tab = localStorage.getItem('fb.tab') || 'gen'; } catch (e) {}
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'value') el.value = v;
+    else if (k === 'checked' || k === 'disabled' || k === 'selected' || k === 'readOnly') el[k] = !!v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat(Infinity)) if (c !== null && c !== undefined && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+const fmt = n => Number(n || 0).toLocaleString('de-AT');
+const dDE = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '';
+function toast(t) { const el = h('div', { class: 'toast', role: 'status' }, t); document.body.append(el); setTimeout(() => el.remove(), 3200); }
+function msg(kind, ...t) { return h('div', { class: 'msg ' + kind }, ...t); }
+function field(label, input, hint) {
+  if (typeof label === 'string' && input.setAttribute && !input.getAttribute('aria-label')) input.setAttribute('aria-label', label);
+  return h('label', { class: 'f' }, label, hint ? h('small', {}, hint) : null, input);
+}
+function sel(opts, value, attrs) {
+  return h('select', attrs || {}, opts.map(o => { const [v, l] = Array.isArray(o) ? o : [o, o]; return h('option', { value: v, selected: String(v) === String(value) }, l); }));
+}
+function dangerBtn(label, fn) {
+  const b = h('button', { class: 'btn danger', type: 'button' }, label); let armed = false, t;
+  b.onclick = () => { if (!armed) { armed = true; b.classList.add('arm'); b.textContent = 'Wirklich? Nochmal tippen'; t = setTimeout(() => { armed = false; b.classList.remove('arm'); b.textContent = label; }, 4000); return; } clearTimeout(t); fn(); };
+  return b;
+}
+async function api(action, body, opts = {}) {
+  const url = 'api.php?action=' + action + (opts.query ? '&' + new URLSearchParams(opts.query) : '');
+  const init = { method: body !== undefined || opts.form ? 'POST' : 'GET', headers: {} };
+  if (S.auth) init.headers['X-Auth-Token'] = S.auth.token;
+  if (opts.form) init.body = opts.form;
+  else if (body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
+  let res;
+  try { res = await fetch(url, init); } catch (e) { throw new Error('Keine Verbindung zum Server. Bitte Internet prüfen.'); }
+  if (opts.blob && res.ok) return res;
+  let data = {};
+  try { data = await res.json(); } catch (e) { data = { error: 'Unerwartete Antwort vom Server (' + res.status + ').' }; }
+  if (res.status === 401 && action !== 'login') { logout(true); throw new Error(data.error || 'Bitte neu anmelden.'); }
+  if (res.status === 428) { S.auth.user.force_pw_change = true; render(); throw new Error(data.error); }
+  if (!res.ok || data.error) throw new Error(data.error || ('Fehler ' + res.status));
+  return data;
+}
+// Knopf waehrend der Arbeit sperren, Fehler anzeigen
+async function busy(btn, fn) {
+  const old = btn.textContent; btn.disabled = true; btn.textContent = 'Bitte warten…';
+  try { return await fn(); } catch (e) { toast(e.message); throw e; } finally { btn.disabled = false; btn.textContent = old; }
+}
+function saveAuth() { if (S.auth) localStorage.setItem('fb.auth', JSON.stringify(S.auth)); else localStorage.removeItem('fb.auth'); }
+function logout(silent) { if (!silent && S.auth) api('logout', {}).catch(() => {}); S.auth = null; saveAuth(); render(); }
+async function download(btn, query, name) {
+  await busy(btn, async () => {
+    const res = await api('pdf', undefined, { query, blob: true });
+    const url = URL.createObjectURL(await res.blob());
+    const a = h('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  });
+}
+async function upload(art, accept) {
+  const inp = h('input', { type: 'file', accept });
+  const file = await new Promise(r => { inp.onchange = () => r(inp.files[0]); inp.click(); });
+  if (!file) return null;
+  const fd = new FormData(); fd.append('datei', file);
+  return api('import', undefined, { query: { art }, form: fd });
+}
+function jahrOptionen(jahre) { const y = new Date().getFullYear(); const s = new Set(jahre); for (let j = y - 10; j <= y + 2; j++) s.add(j); return [...s].sort((a, b) => a - b); }
+
+/* ================= Editierbare Tabelle ================= */
+// cols: {key, label, type: text|number|date|time|select|ro, options, width}
+function grid(cols, rows, opt = {}) {
+  let data = rows.map(r => ({ ...r }));
+  const tbody = h('tbody');
+  const cell = (r, c) => {
+    if (c.type === 'ro') return h('td', { class: 'ro' }, c.show ? c.show(r) : (r[c.key] ?? ''));
+    const set = e => { r[c.key] = c.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value; opt.onchange && opt.onchange(r, c.key); };
+    let inp;
+    if (c.type === 'select') inp = sel([['', '–'], ...c.options()], r[c.key] ?? '', { onchange: set, style: c.width ? 'min-width:' + c.width : null, 'aria-label': c.label });
+    else inp = h('input', { type: c.type || 'text', value: r[c.key] ?? '', oninput: set, list: c.list, placeholder: c.ph, inputmode: c.ph ? 'numeric' : null, step: c.type === 'number' ? '1' : null, style: c.width ? 'min-width:' + c.width : null, 'aria-label': c.label });
+    return h('td', { class: c.type === 'number' ? 'num' : '' }, inp);
+  };
+  const draw = () => {
+    tbody.replaceChildren(...data.map(r => {
+      const tr = h('tr', { class: (r._del ? 'del ' : '') + (opt.rowClass ? opt.rowClass(r) : '') }, cols.map(c => cell(r, c)));
+      if (opt.edit !== false) tr.append(h('td', { class: 'x' }, h('button', { type: 'button', title: r._del ? 'Wiederherstellen' : 'Zeile löschen', onclick: () => { r._del = !r._del; draw(); } }, r._del ? '↺' : '✕')));
+      return tr;
+    }));
+  };
+  draw();
+  const tbl = h('div', { class: 'tbl', style: opt.maxh ? 'max-height:' + opt.maxh : null },
+    h('table', {}, h('thead', {}, h('tr', {}, cols.map(c => h('th', {}, c.label)), opt.edit !== false ? h('th', {}, '') : null)), tbody));
+  const box = h('div', { style: 'display:grid;gap:8px' }, tbl);
+  if (opt.edit !== false && opt.add !== false) box.append(h('div', {}, h('button', { class: 'btn sm', type: 'button', onclick: () => { data.push(opt.neu ? opt.neu() : {}); draw(); tbl.scrollTop = tbl.scrollHeight; } }, '+ Zeile')));
+  return { el: box, get: () => data.filter(r => !r._del).map(r => { const o = { ...r }; delete o._del; return o; }), set: rs => { data = rs.map(r => ({ ...r })); draw(); } };
+}
+
+/* ================= Anmeldung ================= */
+function viewLogin() {
+  const u = h('input', { autocomplete: 'username', 'aria-label': 'Benutzername oder E-Mail' });
+  const p = h('input', { type: 'password', autocomplete: 'current-password', 'aria-label': 'Passwort' });
+  const out = h('div');
+  const go = async e => {
+    e.preventDefault();
+    out.replaceChildren();
+    try { const d = await api('login', { username: u.value, password: p.value }); S.auth = { token: d.token, user: d.user }; saveAuth(); render(); }
+    catch (er) { out.replaceChildren(msg('err', er.message)); }
+  };
+  const forgot = async () => {
+    out.replaceChildren();
+    if (!u.value.trim()) { out.replaceChildren(msg('warn', 'Bitte zuerst oben deinen Benutzernamen eintragen.')); return; }
+    try { const d = await api('forgot', { username: u.value }); out.replaceChildren(msg('ok', d.message)); } catch (er) { out.replaceChildren(msg('err', er.message)); }
+  };
+  return h('div', { class: 'login' }, h('h1', {}, h('small', {}, 'Fahrtenbuch 3.0'), 'Anmelden'),
+    h('form', { class: 'card', onsubmit: go }, field('Benutzername oder E-Mail', u), field('Passwort', p),
+      h('button', { class: 'btn pri', type: 'submit' }, 'Anmelden'),
+      h('button', { class: 'btn', type: 'button', onclick: forgot }, 'Passwort vergessen'), out));
+}
+function viewPwChange() {
+  const p1 = h('input', { type: 'password', autocomplete: 'new-password' }), p2 = h('input', { type: 'password', autocomplete: 'new-password' }), out = h('div');
+  return h('div', { class: 'login' }, h('h1', {}, h('small', {}, 'Fahrtenbuch'), 'Neues Passwort'),
+    h('form', { class: 'card', onsubmit: async e => {
+      e.preventDefault();
+      if (p1.value !== p2.value) { out.replaceChildren(msg('err', 'Die Passwörter stimmen nicht überein.')); return; }
+      try { const d = await api('password', { new: p1.value }); S.auth.user = d.user; saveAuth(); toast('Passwort geändert.'); render(); } catch (er) { out.replaceChildren(msg('err', er.message)); }
+    } }, msg('warn', 'Bitte vor der ersten Nutzung ein eigenes Passwort setzen.'), field('Neues Passwort (mind. 6 Zeichen)', p1), field('Wiederholen', p2),
+      h('button', { class: 'btn pri' }, 'Speichern und weiter'), h('button', { class: 'btn', type: 'button', onclick: () => logout() }, 'Abmelden'), out));
+}
+
+/* ================= Rahmen ================= */
+const TABS = [['stamm', 'Stammdaten'], ['gen', 'Generator'], ['fz', 'Fahrzeuge & Orte'], ['privat', 'Privat-KM'], ['pruef', 'Prüfung'], ['export', 'Export & HU'], ['admin', 'Admin']];
+function render() {
+  if (!S.auth) { $root.replaceChildren(viewLogin()); return; }
+  if (S.auth.user.force_pw_change) { $root.replaceChildren(viewPwChange()); return; }
+  const tabs = TABS.filter(t => t[0] !== 'admin' || S.auth.user.is_admin);
+  if (!tabs.some(t => t[0] === S.tab)) S.tab = 'gen';
+  const main = h('main');
+  $root.replaceChildren(h('div', { class: 'wrap' },
+    h('header', {}, h('div', { class: 'top' }, h('h1', {}, h('small', {}, 'Fahrtenbuch 3.0'), TABS.find(t => t[0] === S.tab)[1]),
+      h('div', { class: 'who' }, S.auth.user.username, h('button', { class: 'btn sm', onclick: () => logout() }, 'Abmelden'))),
+      h('nav', {}, tabs.map(([k, l]) => h('button', { 'aria-current': k === S.tab ? 'page' : null, onclick: () => { S.tab = k; localStorage.setItem('fb.tab', k); render(); } }, l)))),
+    main));
+  const v = { stamm: viewStamm, gen: viewGen, fz: viewFz, privat: viewPrivat, pruef: viewPruef, export: viewExport, admin: viewAdmin }[S.tab];
+  main.append(h('p', { class: 'hint', style: 'margin-top:16px' }, 'Lade…'));
+  v(main).catch(e => main.replaceChildren(msg('err', e.message)));
+}
+
+/* ================= Stammdaten ================= */
+async function viewStamm(main) {
+  const { stamm: s } = await api('stamm_get');
+  const f = {};
+  const inp = (k, type = 'text', attrs = {}) => (f[k] = h('input', { type, value: s[k] ?? '', ...attrs }));
+  const prev = h('p', { class: 'hint' });
+  const vorschau = () => {
+    const mn = +f.taggeld_min_stunden.value, b = +f.taggeld_basis.value, st = +f.taggeld_stufung.value, mx = +f.taggeld_max_betrag.value, mh = +f.taggeld_max_stunden.value, t = [];
+    for (let x = Math.floor(mn); x <= Math.floor(mh) + 1; x++) t.push(x + ' h = ' + (x >= mh ? mx : Math.min(b + (x - mn) * st, mx)).toFixed(2).replace('.', ',') + ' €');
+    prev.textContent = 'Vorschau: ' + t.join(' | ');
+  };
+  const out = h('div');
+  const pwAlt = h('input', { type: 'password', autocomplete: 'current-password' }), pwNeu = h('input', { type: 'password', autocomplete: 'new-password' });
+  main.replaceChildren(
+    h('form', { class: 'card', oninput: vorschau, onsubmit: async e => {
+      e.preventDefault();
+      const d = {}; for (const k in f) d[k] = f[k].value;
+      try { await api('stamm_save', { stamm: d }); out.replaceChildren(msg('ok', 'Stammdaten gespeichert.')); } catch (er) { out.replaceChildren(msg('err', er.message)); }
+    } },
+      h('h2', {}, 'Persönliche Daten'),
+      h('div', { class: 'grid2' }, field('Name', inp('name')), field('PNR', inp('pnr')), field('Wohnort', inp('wohnort')), field('Dienstort', inp('dienstort')),
+        field('Entfernung Wohnung ↔ Arbeitsplatz (km)', inp('entfernung', 'number', { min: 0, max: 300 })), field('Kilometergeld PKW amtlich (€)', inp('km_geld', 'number', { step: '0.01', min: 0 }))),
+      h('h2', {}, 'Taggeld'),
+      h('p', { class: 'hint' }, 'Taggeld nur bei echten Dienstfahrten (Dienst-KM > 0): ab Mindeststunden Basis-Betrag, je weitere Stunde + Zuschlag, gedeckelt beim Maximum.'),
+      h('div', { class: 'grid2' }, field('Taggeld ab Stunden', inp('taggeld_min_stunden', 'number', { step: '0.5' })), field('Basis-Betrag (€)', inp('taggeld_basis', 'number', { step: '0.5' })),
+        field('Zuschlag pro weitere Stunde (€)', inp('taggeld_stufung', 'number', { step: '0.1' })), field('Maximalbetrag (€)', inp('taggeld_max_betrag', 'number', { step: '0.5' })),
+        field('Maximum ab Stunden', inp('taggeld_max_stunden', 'number', { step: '0.5' }))),
+      prev, h('div', {}, h('button', { class: 'btn pri' }, 'Stammdaten speichern')), out),
+    h('form', { class: 'card', onsubmit: async e => {
+      e.preventDefault();
+      try { await api('password', { old: pwAlt.value, new: pwNeu.value }); pwAlt.value = pwNeu.value = ''; toast('Passwort geändert. Andere Geräte wurden abgemeldet.'); } catch (er) { toast(er.message); }
+    } }, h('h2', {}, 'Mein Passwort ändern'), h('div', { class: 'grid2' }, field('Bisheriges Passwort', pwAlt), field('Neues Passwort (mind. 6 Zeichen)', pwNeu)),
+      h('div', {}, h('button', { class: 'btn' }, 'Passwort ändern'))));
+  vorschau();
+}
+
+/* ================= Monats-Editor (Generator + Pruefung) ================= */
+function monatsEditor(J, monat, onSaved) {
+  const namen = J.fahrzeuge.map(f => f.bezeichnung);
+  const rows = (J.monate[monat] || []).map(r => ({ ...r }));
+  const g = grid([
+    { key: 'datum', label: 'Datum', type: 'date' },
+    { key: 'tag', label: 'Tag', type: 'ro', show: r => r.datum ? WT[new Date(r.datum + 'T12:00').getDay()] : '' },
+    { key: 'fahrzeug', label: 'Fahrzeug', type: 'select', options: () => namen, width: '130px' },
+    { key: 'route', label: 'Reiseweg – Ziel – Zweck', width: '340px' },
+    { key: 'abf', label: 'Abf.', width: '62px', ph: 'HH:MM' }, { key: 'ank', label: 'Ank.', width: '62px', ph: 'HH:MM' },
+    { key: 'dauer', label: 'Dauer', type: 'ro' },
+    { key: 'km_d', label: 'km dienstl.', type: 'number', width: '70px' }, { key: 'km_p', label: 'km privat', type: 'number', width: '70px' },
+    { key: 'abfahrt_km', label: 'KM Abfahrt', type: 'ro', show: r => fmt(r.abfahrt_km) },
+  ], rows, { rowClass: r => (r.datum && [0, 6].includes(new Date(r.datum + 'T12:00').getDay())) ? 'we' : '',
+    neu: () => ({ datum: `${J.jahr}-${String(monat).padStart(2, '0')}-01`, fahrzeug: namen[0] || '', route: '', abf: '08:00', ank: '17:00', km_d: 0, km_p: 0 }) });
+  const sum = rows.reduce((a, r) => [a[0] + (+r.km_d || 0), a[1] + (+r.km_p || 0)], [0, 0]);
+  const saveBtn = h('button', { class: 'btn pri', onclick: () => busy(saveBtn, async () => {
+    const d = await api('monat_save', { jahr: J.jahr, monat, rows: g.get() });
+    toast('Gespeichert – Kilometerkette des Jahres neu aufgebaut.'); onSaved(d);
+  }) }, 'Änderungen speichern');
+  return h('div', { style: 'display:grid;gap:10px' },
+    h('div', { class: 'stats' }, h('div', { class: 'stat' }, h('b', {}, fmt(sum[0])), h('span', {}, 'Dienst-KM ' + MONATE[monat - 1])),
+      h('div', { class: 'stat' }, h('b', {}, fmt(sum[1])), h('span', {}, 'Privat-KM')), h('div', { class: 'stat' }, h('b', {}, rows.length), h('span', {}, 'Einträge'))),
+    g.el, h('div', { class: 'row' }, saveBtn, h('p', { class: 'hint' }, 'Beim Speichern werden ALLE Kilometerstände des Jahres ab dem Jahres-Startwert neu berechnet und geprüft. Dauer ergibt sich aus Abfahrt/Ankunft.')));
+}
+function flagsBox(flags, nurMonat) {
+  const keys = Object.keys(flags || {}).map(Number).filter(m => !nurMonat || m === nurMonat).sort((a, b) => a - b);
+  if (!keys.length) return msg('ok', 'Plausibilitätsprüfung: keine Auffälligkeiten.');
+  const n = keys.reduce((a, m) => a + flags[m].length, 0);
+  return h('div', { style: 'display:grid;gap:6px' }, msg('warn', `Plausibilitätsprüfung: ${n} Auffälligkeit(en) in ${keys.length} Monat(en).`),
+    keys.map(m => h('details', {}, h('summary', {}, `${MONATE[m - 1]}: ${flags[m].length} Auffälligkeit(en)`), h('ul', {}, flags[m].map(f => h('li', {}, f))))));
+}
+
+/* ================= Generator ================= */
+async function viewGen(main) {
+  if (!S.jahr) S.jahr = new Date().getFullYear();
+  let J = await api('jahr_get', undefined, { query: { jahr: S.jahr } });
+  const st = J.settings || {};
+  const namen = J.fahrzeuge.map(f => f.bezeichnung);
+  const F = {};
+  const jahrSel = sel(jahrOptionen(J.jahre), S.jahr, { onchange: e => { S.jahr = +e.target.value; render(); } });
+  F.keyword_text = h('textarea', { 'aria-label': 'Orte und Zwecke' }, st.keyword_text || J.default_keywords);
+  const kwBtn = h('button', { class: 'btn sm', type: 'button', onclick: () => busy(kwBtn, async () => { const d = await upload('keywords', '.xlsx,.csv'); if (d) { F.keyword_text.value = d.keyword_text; toast('Keywords übernommen – werden beim Generieren gespeichert.'); } }) }, 'Keywords.xlsx laden');
+  F.anzahl_wochen = sel([0, 1, 2, 3, 4], st.anzahl_wochen ?? 0);
+  F.verteilung = sel(['1x4 Wochen', '2x2 Wochen', '4x1 Woche'], st.verteilung || '1x4 Wochen');
+  F.start_woche_1 = h('input', { type: 'date', value: st.start_woche_1 || `${S.jahr}-04-01` });
+  F.urlaub_fahrzeug_name = sel(namen, st.urlaub_fahrzeug_name || namen[0]);
+  F.urlaub_km_min = h('input', { type: 'number', min: 0, max: 500, value: st.urlaub_km_min ?? 30 });
+  F.urlaub_km_max = h('input', { type: 'number', min: 0, max: 500, value: st.urlaub_km_max ?? 80 });
+  F.modus = sel(['Einzelner Monat', 'Ganzes Jahr'], st.modus || 'Einzelner Monat');
+  F.generierungs_monat = sel(MONATE.map((m, i) => [i + 1, m]), st.generierungs_monat || new Date().getMonth() + 1);
+  const rng = (k, def, lbl) => { const i = h('input', { type: 'range', min: 0, max: 100, value: st[k] ?? def }); const o = h('b', {}, i.value + ' %'); i.oninput = () => o.textContent = i.value + ' %'; F[k] = i; return field(h('span', {}, lbl + ': ', o), i); };
+  F.target_km_min = h('input', { type: 'number', min: 0, max: 5000, step: 50, value: st.target_km_min ?? 1650 });
+  F.target_km_max = h('input', { type: 'number', min: 0, max: 5000, step: 50, value: st.target_km_max ?? 2000 });
+  F.hauptfahrzeug_name = sel([['', '(keines – gleichmäßig)'], ...namen], st.hauptfahrzeug_name || '');
+  const urlaubBox = h('div', { class: 'grid2' }, field('Verteilung', F.verteilung), field('Start der 1. Urlaubswoche', F.start_woche_1),
+    field('Fahrzeug für private Urlaubs-KM', F.urlaub_fahrzeug_name), field('Privat-KM pro Urlaubstag (Min)', F.urlaub_km_min), field('Privat-KM pro Urlaubstag (Max)', F.urlaub_km_max));
+  const syncUrlaub = () => urlaubBox.hidden = F.anzahl_wochen.value === '0';
+  F.anzahl_wochen.onchange = syncUrlaub;
+  const syncModus = () => { F.generierungs_monat.disabled = F.modus.value === 'Ganzes Jahr'; genBtn.textContent = 'Fahrten für ' + (F.modus.value === 'Ganzes Jahr' ? 'ganzes Jahr' : MONATE[F.generierungs_monat.value - 1]) + ' ' + S.jahr + ' generieren'; };
+  F.modus.onchange = syncModus; F.generierungs_monat.onchange = syncModus;
+  const ergebnis = h('div', { style: 'display:grid;gap:8px' });
+  const bereit = J.fahrzeuge.length && J.zeitraeume.length;
+  const genBtn = h('button', { class: 'btn pri', disabled: !bereit, onclick: () => busy(genBtn, async () => {
+    const s = {}; for (const k in F) s[k] = F[k].value;
+    for (const k of ['anzahl_wochen', 'urlaub_km_min', 'urlaub_km_max', 'prob_werktag', 'prob_feiertag_urlaub', 'target_km_min', 'target_km_max', 'hauptfahrzeug_anteil', 'generierungs_monat']) s[k] = +s[k];
+    const d = await api('generieren', { jahr: S.jahr, settings: s });
+    J = { ...J, monate: d.monate, jahre: d.jahre, flags: d.flags };
+    const ende = J.fahrzeuge.filter(f => d.ende[f.id] !== undefined).map(f => `• ${f.bezeichnung}: ${fmt(d.ende[f.id])} km`).join('\n');
+    ergebnis.replaceChildren(msg('ok', `Fahrten für ${d.generiert.length} Monat(e) generiert und gespeichert. Startwerte für ${S.jahr + 1} vorbelegt.\n\nEndkilometerstand pro Fahrzeug (31.12.):\n${ende}`),
+      d.fehlende.length ? msg('warn', 'Keine Distanz gepflegt für: ' + d.fehlende.join(', ') + ' – dafür wurden Zufalls-KM verwendet. Im Tab „Fahrzeuge & Orte“ die Distanzen online berechnen und neu generieren.') : null);
+    zeigeMonate(d.generiert[d.generiert.length - 1]);
+  }) }, '');
+  const monatBox = h('div', { style: 'display:grid;gap:10px' });
+  const zeigeMonate = (m) => {
+    const mm = Object.keys(J.monate).map(Number).sort((a, b) => a - b);
+    if (!mm.length) { monatBox.replaceChildren(msg('info', `Für ${S.jahr} sind noch keine Fahrten gespeichert – oben generieren.`)); return; }
+    if (!mm.includes(m)) m = mm[mm.length - 1];
+    const ms = sel(mm.map(x => [x, MONATE[x - 1]]), m, { onchange: e => zeigeMonate(+e.target.value) });
+    const pdfM = h('button', { class: 'btn', onclick: () => download(pdfM, { jahr: S.jahr, monat: m }, `Fahrtenbuch_${S.jahr}_${String(m).padStart(2, '0')}.pdf`) }, `Monats-PDF ${MONATE[m - 1]}`);
+    const pdfJ = h('button', { class: 'btn', onclick: () => download(pdfJ, { jahr: S.jahr }, `Fahrtenbuch_Jahresuebersicht_${S.jahr}.pdf`) }, `Jahresbericht-PDF ${S.jahr}`);
+    monatBox.replaceChildren(h('h2', {}, `Fahrten ${S.jahr}`), flagsBox(J.flags), h('div', { class: 'row' }, field('Monat anzeigen/bearbeiten', ms), pdfM, pdfJ),
+      monatsEditor(J, m, d => { J = { ...J, monate: d.monate, jahre: d.jahre, flags: d.flags }; zeigeMonate(m); }));
+  };
+  main.replaceChildren(
+    h('div', { class: 'card' }, h('div', { class: 'row' }, field('Jahr öffnen', jahrSel), h('p', { class: 'hint' }, Object.keys(J.monate).length ? `${Object.keys(J.monate).length} Monat(e) mit gespeicherten Fahrten.` + (Object.keys(st).length ? ' Einstellungen wiederhergestellt.' : '') : 'Noch keine Fahrten gespeichert.')),
+      !bereit ? msg('warn', 'Für die Generierung werden Fahrzeuge und Zeiträume benötigt – bitte im Tab „Fahrzeuge & Orte“ anlegen.') : null),
+    h('div', { class: 'card' }, h('h2', {}, `Eckdaten für ${S.jahr}`), h('p', { class: 'hint' }, 'Werden pro Jahr gespeichert und beim Öffnen wiederhergestellt.'),
+      h('div', { class: 'grid2' }, field('Generierungs-Modus', F.modus), field('Monat', F.generierungs_monat), rng('prob_werktag', 75, 'Wahrscheinlichkeit Dienstfahrt Werktag'), rng('prob_feiertag_urlaub', 5, 'Dienstfahrt an Feiertagen/Urlaubstagen')),
+      h('div', { class: 'grid2' }, field('Dienst-KM pro Monat (Minimum)', F.target_km_min), field('Dienst-KM pro Monat (Maximum)', F.target_km_max)),
+      h('p', { class: 'hint' }, 'Monatsziele: Jeder Monat bekommt einen eigenen Zufallswert zwischen Minimum − 100 km und Maximum + 100 km – die Monate starten dadurch nie mit demselben Kilometerstand. Die Werktag-% steuert die Anzahl der Stopps.'),
+      h('div', { class: 'grid2' }, field('Hauptfahrzeug', F.hauptfahrzeug_name), rng('hauptfahrzeug_anteil', 70, 'Anteil Hauptfahrzeug')),
+      h('details', {}, h('summary', {}, 'Urlaubswochen'), h('div', { style: 'display:grid;gap:10px;margin-top:10px' }, field('Anzahl Urlaubswochen', F.anzahl_wochen), urlaubBox)),
+      h('details', {}, h('summary', {}, 'Orte und Zwecke (Format „Ort:Zweck1,Zweck2“ pro Zeile)'), h('div', { style: 'display:grid;gap:8px;margin-top:10px' }, F.keyword_text, h('div', {}, kwBtn))),
+      h('div', {}, genBtn), ergebnis),
+    h('div', { class: 'card' }, monatBox),
+    h('div', { class: 'card' }, h('details', {}, h('summary', {}, 'Startwerte / Jahr löschen'), h('div', { style: 'display:grid;gap:10px;margin-top:10px' },
+      h('p', { class: 'hint' }, `Jahres-Startwerte ${S.jahr}: ` + (J.fahrzeuge.map(f => `${f.bezeichnung} ${J.anker[f.id] !== undefined ? fmt(J.anker[f.id]) : '–'} km`).join(' · '))),
+      h('p', { class: 'hint' }, 'Neu einlesen löscht den Startanker. Beim nächsten Generieren/Speichern werden die Werte aus „Start-KM (Vorjahr)“ der Fahrzeuge übernommen.'),
+      h('div', { class: 'row' }, dangerBtn(`Startwerte für ${S.jahr} neu einlesen`, async () => { await api('anker_reset', { jahr: S.jahr }); toast('Startwerte gelöscht.'); render(); }),
+        dangerBtn(`Alle Fahrten ${S.jahr} endgültig löschen`, async () => { await api('jahr_delete', { jahr: S.jahr }); toast(`Jahr ${S.jahr} gelöscht.`); render(); }))))));
+  syncUrlaub(); syncModus(); zeigeMonate(+(F.generierungs_monat.value));
+}
+
+/* ================= Fahrzeuge & Orte ================= */
+async function viewFz(main) {
+  const D = await api('fz_get');
+  const fzGrid = grid([
+    { key: 'id', label: 'ID', type: 'ro' }, { key: 'bezeichnung', label: 'Bezeichnung', width: '140px' }, { key: 'kennzeichen', label: 'Kennzeichen', width: '100px' },
+    { key: 'start_km_vorjahr', label: 'Start-KM (Vorjahr)', type: 'number', width: '100px' }, { key: 'privat_km_min', label: 'Privat min. km', type: 'number', width: '70px' },
+    { key: 'privat_km_max', label: 'Privat max. km', type: 'number', width: '70px' }, { key: 'dienstlich_quote', label: 'Dienstlich %', type: 'number', width: '60px' },
+  ], D.fahrzeuge, { neu: () => ({ privat_km_min: 5, privat_km_max: 20, dienstlich_quote: 90, start_km_vorjahr: 0 }) });
+  const fzOpts = () => D.fahrzeuge.map(f => [f.id, `${f.bezeichnung} (${f.kennzeichen})`]);
+  const zrGrid = grid([{ key: 'fahrzeug_id', label: 'Fahrzeug', type: 'select', options: fzOpts }, { key: 'von', label: 'Von', type: 'date' }, { key: 'bis', label: 'Bis', type: 'date' }], D.zeitraeume);
+  let filter = '';
+  const ortGrid = grid([{ key: 'ort', label: 'Ort', width: '200px' }, { key: 'km_einfach', label: 'km einfach vom Wohnort', type: 'number', width: '90px' }], D.orte, { neu: () => ({ ort: '', km_einfach: 0 }) });
+  const mxGrid = grid([{ key: 'ort_a', label: 'Ort A', type: 'ro' }, { key: 'ort_b', label: 'Ort B', type: 'ro' }, { key: 'km', label: 'km', type: 'number', width: '80px' }, { key: 'quelle', label: 'Quelle', type: 'ro' }], D.matrix, { add: false, maxh: '50vh' });
+  const mxFilter = h('input', { placeholder: 'Ort suchen…', oninput: e => { filter = e.target.value.toLowerCase(); mxGrid.set(alleMx().filter(r => !filter || (r.ort_a + ' ' + r.ort_b).toLowerCase().includes(filter))); } });
+  let mxAlle = D.matrix.map(r => ({ ...r }));
+  const alleMx = () => { const sicht = new Map(mxGrid.get().map(r => [r.ort_a + '|' + r.ort_b, r])); return mxAlle.map(r => sicht.get(r.ort_a + '|' + r.ort_b) || r); };
+  const save = (btn, fn) => h('button', { class: 'btn pri', onclick: e => busy(e.target, fn) }, btn);
+  const imp = (label, art, accept, fn) => { const b = h('button', { class: 'btn sm', type: 'button', onclick: () => busy(b, async () => { const d = await upload(art, accept); if (d) fn(d); }) }, label); return b; };
+  // Online-Distanzen
+  const zusatz = h('input', { placeholder: 'z. B. Werkstätten, kommagetrennt' });
+  const nurFehl = h('input', { type: 'checkbox', checked: true });
+  const bar = h('i'); const status = h('p', { class: 'hint' }); const geoOut = h('div', { style: 'display:grid;gap:6px' });
+  const geoBtn = h('button', { class: 'btn pri', onclick: () => busy(geoBtn, async () => {
+    geoOut.replaceChildren();
+    const plan = await api('geo_plan', { zusatz: zusatz.value.split(',').map(s => s.trim()).filter(Boolean) });
+    const nicht = [];
+    for (let i = 0; i < plan.zu_suchen.length; i++) {
+      const o = plan.zu_suchen[i];
+      status.textContent = `Ort ${i + 1}/${plan.zu_suchen.length} auf der Karte suchen: ${o}`; bar.style.width = (i / Math.max(1, plan.zu_suchen.length) * 80) + '%';
+      const r = await api('geo_one', { ort: o }); if (!r.ok) nicht.push(o);
+      await new Promise(r => setTimeout(r, 1100)); // OpenStreetMap: max. 1 Anfrage pro Sekunde
+    }
+    status.textContent = 'Fahrstrecken zwischen allen Orten berechnen…'; bar.style.width = '90%';
+    const r = await api('geo_route', { orte: plan.orte, nur_fehlende: nurFehl.checked });
+    bar.style.width = '100%'; status.textContent = 'Fertig.';
+    geoOut.replaceChildren(msg('ok', `${r.neu} Strecken berechnet` + (r.osrm ? ' (echte Fahrstrecken).' : '.') + (r.aktualisiert.length ? '\n„km einfach“ aktualisiert: ' + r.aktualisiert.join(', ') : '') + '\n\nWichtig: Jahr im Generator neu generieren, damit die neuen Kilometer einfließen.'),
+      r.geschaetzt ? msg('warn', `${r.geschaetzt} Strecke(n) konnten nicht geroutet werden und wurden aus der Luftlinie geschätzt (× 1,25).`) : null,
+      nicht.length ? msg('warn', 'Nicht gefunden: ' + nicht.join(', ') + ' – bitte Schreibweise prüfen oder Distanz manuell eintragen.') : null,
+      h('button', { class: 'btn sm', onclick: () => render() }, 'Tabellen neu laden'));
+  }) }, 'Distanzen online berechnen');
+
+  main.replaceChildren(
+    h('div', { class: 'card' }, h('h2', {}, 'Fahrzeuge'), h('p', { class: 'hint' }, 'IDs bleiben beim Speichern stabil. Excel-Importe werden über die Bezeichnung zugeordnet (Excel-IDs werden ignoriert).'),
+      h('div', {}, imp('Fahrzeugliste.xlsx laden', 'fahrzeuge', '.xlsx,.csv', d => {
+        const alt = new Map(fzGrid.get().map(f => [String(f.bezeichnung).trim().toLowerCase(), f.id]));
+        fzGrid.set(d.fahrzeuge.map(f => ({ ...f, id: alt.get(f.bezeichnung.trim().toLowerCase()) ?? '' })));
+        toast('Fahrzeuge aus Excel geladen – noch NICHT gespeichert.');
+      })),
+      fzGrid.el, h('div', {}, save('Fahrzeuge speichern', async () => { const d = await api('fz_save', { fahrzeuge: fzGrid.get() }); D.fahrzeuge = d.fahrzeuge; fzGrid.set(d.fahrzeuge); zrGrid.set(d.zeitraeume); toast('Fahrzeuge gespeichert.'); }))),
+    h('div', { class: 'card' }, h('h2', {}, 'Nutzungszeiträume'), h('p', { class: 'hint' }, 'Welches Fahrzeug wann zur Verfügung stand. Der Generator wählt pro Tag nur aus gültigen Fahrzeugen.'),
+      h('div', {}, imp('Fahrzeug-Zeitraeume.xlsx laden', 'zeitraeume', '.xlsx,.csv', d => {
+        zrGrid.set(d.zeitraeume); const offen = d.zeitraeume.filter(z => !z.fahrzeug_id).length;
+        toast(offen ? `${offen} Zeile(n) ohne Fahrzeug-Zuordnung – bitte im Dropdown wählen und speichern.` : 'Zeiträume geladen – noch NICHT gespeichert.');
+      })),
+      zrGrid.el, h('div', {}, save('Zeiträume speichern', async () => { const d = await api('zr_save', { zeitraeume: zrGrid.get() }); zrGrid.set(d.zeitraeume); toast('Zeiträume gespeichert.'); }))),
+    h('div', { class: 'card' }, h('h2', {}, 'Orte & Distanzen'), h('p', { class: 'hint' }, 'Pro Ort die einfache Strecke vom Wohnort. Wird bei der Online-Berechnung automatisch gefüllt.'),
+      h('div', {}, imp('Orte.xlsx / Orte.csv laden', 'orte', '.xlsx,.csv', d => {
+        const vorh = new Set(ortGrid.get().map(o => o.ort.trim().toLowerCase()));
+        ortGrid.set([...ortGrid.get(), ...d.orte.filter(o => !vorh.has(o.toLowerCase())).map(o => ({ ort: o, km_einfach: 0 }))]);
+        toast(d.orte.length + ' Orte erkannt – noch NICHT gespeichert.');
+      })),
+      ortGrid.el, h('div', {}, save('Orte speichern', async () => { await api('orte_save', { orte: ortGrid.get() }); toast('Orte gespeichert.'); }))),
+    h('div', { class: 'card' }, h('h2', {}, 'Distanzen automatisch berechnen (Online-Karte)'),
+      h('p', { class: 'hint' }, 'Sucht alle Orte (gespeicherte Orte, Wohnort, Dienstort) auf OpenStreetMap und berechnet die echten Fahrstrecken zwischen allen Orten. Kein Schlüssel nötig. Vorher die Orte speichern. Manuell geänderte Strecken werden nie überschrieben.'),
+      h('div', { class: 'grid2' }, field('Zusätzliche Orte', zusatz), h('label', { class: 'chk' }, nurFehl, 'Nur fehlende Strecken berechnen')),
+      h('div', {}, geoBtn), h('div', { class: 'prog' }, bar), status, geoOut),
+    h('div', { class: 'card' }, h('h2', {}, 'Distanz-Matrix (Ort zu Ort)'), h('p', { class: 'hint' }, `${D.matrix.length} Strecken. Jede gilt in beide Richtungen. km ändern und speichern überschreibt den Online-Wert (Quelle „manuell“).`),
+      mxFilter, mxGrid.el, h('div', {}, save('Matrix speichern', async () => {
+        const vis = new Set(mxGrid.get().map(r => r.ort_a + '|' + r.ort_b));
+        const sichtbarVorher = mxAlle.filter(r => !filter || (r.ort_a + ' ' + r.ort_b).toLowerCase().includes(filter));
+        const geloescht = new Set(sichtbarVorher.filter(r => !vis.has(r.ort_a + '|' + r.ort_b)).map(r => r.ort_a + '|' + r.ort_b));
+        mxAlle = alleMx().filter(r => !geloescht.has(r.ort_a + '|' + r.ort_b));
+        await api('matrix_save', { matrix: mxAlle }); toast('Distanz-Matrix gespeichert.');
+      }))));
+}
+
+/* ================= Privat-KM ================= */
+async function viewPrivat(main) {
+  const J0 = await api('jahr_get', undefined, { query: { jahr: S.jahr || new Date().getFullYear() } });
+  const jahr = S.privJahr || (J0.jahre.length ? Math.max(...J0.jahre) : new Date().getFullYear());
+  const J = jahr === J0.jahr ? J0 : await api('jahr_get', undefined, { query: { jahr } });
+  if (!J.fahrzeuge.length) { main.replaceChildren(msg('warn', 'Zuerst Fahrzeuge anlegen.')); return; }
+  const fzSel = sel(J.fahrzeuge.map(f => [f.id, f.bezeichnung]), S.privFz || J.fahrzeuge[0].id, { onchange: e => { S.privFz = +e.target.value; render(); } });
+  const fid = +fzSel.value;
+  let ist = 0, tage = 0;
+  for (const rows of Object.values(J.monate)) for (const r of rows) if (r.fahrzeug_id === fid && r.km_p > 0) { ist += r.km_p; tage++; }
+  const num = (v, min, max, step) => h('input', { type: 'number', value: v, min, max, step });
+  const total = num(Math.max(ist, 5000), 0, 100000, 100), anz = num(4, 0, 12, 1), gmin = num(300, 100, 2000, 50), gmax = num(800, 100, 2000, 50), nmin = num(5, 0, 200, 5), nmax = num(45, 5, 300, 5);
+  const out = h('div', { style: 'display:grid;gap:6px' });
+  const btn = h('button', { class: 'btn pri', disabled: !Object.keys(J.monate).length, onclick: () => busy(btn, async () => {
+    const d = await api('privat_verteilen', { jahr, fahrzeug_id: fid, total: +total.value, anzahl_gross: +anz.value, gross_min: +gmin.value, gross_max: +gmax.value, normal_min: +nmin.value, normal_max: +nmax.value });
+    out.replaceChildren(msg('ok', 'Privat-KM verteilt und gespeichert – Kilometerkette neu aufgebaut.\n\n' + d.meldungen.map(m => '• ' + m).join('\n')));
+  }) }, 'Verteilen und speichern');
+  main.replaceChildren(h('div', { class: 'card' },
+    h('p', { class: 'hint' }, 'Für Fahrzeuge, deren private Nutzung nicht täglich erfasst wird (z. B. Familienauto): Jahres-Summe eingeben, das System verteilt sie realistisch auf das Jahr – inkl. weniger großer Fahrten. Bereits vorhandene Privat-KM dieses Fahrzeugs werden ersetzt, HU-Tage bleiben unberührt.'),
+    h('div', { class: 'grid2' }, field('Jahr', sel(jahrOptionen(J.jahre), jahr, { onchange: e => { S.privJahr = +e.target.value; render(); } })), field('Fahrzeug', fzSel)),
+    Object.keys(J.monate).length ? msg('info', `Ist-Zustand ${jahr}: ${fmt(ist)} km privat auf ${tage} Tagen.`) : msg('warn', `Für ${jahr} sind keine Fahrten gespeichert – zuerst generieren.`),
+    h('div', { class: 'grid2' }, field('Privat-KM gesamt für das Jahr', total), field('Anzahl große Fahrten (Urlaub/Ausflüge)', anz), field('Min. km pro großer Fahrt', gmin), field('Max. km pro großer Fahrt', gmax), field('Normale Tage: min. km', nmin), field('Normale Tage: max. km', nmax)),
+    h('div', {}, btn), out));
+}
+
+/* ================= Pruefung ================= */
+async function viewPruef(main) {
+  let J = await api('jahr_get', undefined, { query: { jahr: S.pruefJahr || S.jahr || new Date().getFullYear() } });
+  if (!S.pruefJahr && J.jahre.length && !Object.keys(J.monate).length) { S.pruefJahr = Math.max(...J.jahre); J = await api('jahr_get', undefined, { query: { jahr: S.pruefJahr } }); }
+  const box = h('div', { style: 'display:grid;gap:10px' });
+  const mm = Object.keys(J.monate).map(Number).sort((a, b) => a - b);
+  const zeige = m => {
+    if (!mm.length) { box.replaceChildren(msg('info', `Keine Fahrten für ${J.jahr} gespeichert.`)); return; }
+    box.replaceChildren(h('div', { class: 'row' }, field('Monat', sel(mm.map(x => [x, MONATE[x - 1] + ((J.flags[x] || []).length ? ' ⚠' : '')]), m, { onchange: e => zeige(+e.target.value) }))),
+      (J.flags[m] || []).length ? msg('err', `${J.flags[m].length} Auffälligkeit(en):\n` + J.flags[m].map(f => '• ' + f).join('\n')) : msg('ok', 'Keine Auffälligkeiten in diesem Monat.'),
+      monatsEditor(J, m, d => { J = { ...J, monate: d.monate, flags: d.flags }; zeige(m); }));
+  };
+  main.replaceChildren(h('div', { class: 'card' },
+    h('p', { class: 'hint' }, 'Findet unplausible Einträge (unrealistische Geschwindigkeit, Ankunft vor Abfahrt, Dienstreise mit 0 km, doppelte Abfahrtszeiten). Korrekturen hier manuell – der Inhalt muss immer der Realität entsprechen.'),
+    h('div', { class: 'row' }, field('Jahr', sel(jahrOptionen(J.jahre), J.jahr, { onchange: e => { S.pruefJahr = +e.target.value; render(); } }))),
+    flagsBox(J.flags), box));
+  const ersteMitFlag = mm.find(m => (J.flags[m] || []).length);
+  zeige(ersteMitFlag || mm[0]);
+}
+
+/* ================= Export & HU ================= */
+async function viewExport(main) {
+  const J = await api('jahr_get', undefined, { query: { jahr: S.jahr || new Date().getFullYear() } });
+  const jahre = J.jahre.length ? J.jahre : [new Date().getFullYear()];
+  const jSel = sel(jahrOptionen(jahre), S.expJahr || Math.max(...jahre), { onchange: e => S.expJahr = +e.target.value });
+  const mSel = sel(MONATE.map((m, i) => [i + 1, m]), new Date().getMonth() + 1);
+  const bM = h('button', { class: 'btn pri', onclick: () => download(bM, { jahr: jSel.value, monat: mSel.value }, `Fahrtenbuch_${jSel.value}_${String(mSel.value).padStart(2, '0')}.pdf`) }, 'Monats-PDF');
+  const bJ = h('button', { class: 'btn pri', onclick: () => download(bJ, { jahr: jSel.value }, `Fahrtenbuch_Jahresuebersicht_${jSel.value}.pdf`) }, 'Jahres-PDF');
+  const H = await api('hu_get');
+  const dl = h('datalist', { id: 'orte-dl' }, H.orte.map(o => h('option', { value: o })));
+  const huGrid = grid([
+    { key: 'fahrzeug_id', label: 'Fahrzeug', type: 'select', options: () => H.fahrzeuge.map(f => [f.id, f.bezeichnung]) }, { key: 'datum', label: 'Datum der HU', type: 'date' },
+    { key: 'km_at_hu', label: 'km-Stand bei HU', type: 'number', width: '100px' }, { key: 'werkstattort', label: 'Werkstattort', list: 'orte-dl', width: '140px' },
+    { key: 'stopps_vor_hu', label: 'Stopps vor HU (kommagetrennt)', width: '200px' }, { key: 'stopps_nach_hu', label: 'Stopps nach HU', width: '200px' },
+  ], H.hu);
+  const out = h('div', { style: 'display:grid;gap:6px' });
+  const bA = h('button', { class: 'btn', onclick: () => busy(bA, async () => {
+    await api('hu_save', { hu: huGrid.get() });
+    const d = await api('hu_anwenden', {});
+    out.replaceChildren(msg('info', d.meldungen.join('\n').replace(/\*\*/g, '')));
+  }) }, 'Speichern und Fahrten an HU anpassen');
+  main.replaceChildren(
+    h('div', { class: 'card' }, h('h2', {}, 'PDF-Export'), h('div', { class: 'row' }, field('Jahr', jSel), field('Monat', mSel), bM, bJ),
+      h('p', { class: 'hint' }, J.jahre.length ? 'Jahre mit Fahrten: ' + J.jahre.join(', ') : 'Noch keine Fahrten gespeichert.')),
+    h('div', { class: 'card' }, h('h2', {}, 'HU-Korrekturen'), dl,
+      h('p', { class: 'hint' }, 'Passt die Kilometer an den echten Tacho-Stand bei der HU an: Vor dem HU-Datum wird so skaliert, dass der Tacho bei Ankunft in der Werkstatt genau den HU-Stand zeigt; danach kompensierend (Jahressumme bleibt). Der Weg zur Werkstatt zählt privat, Kundenstopps dienstlich. Eine HU wird nur EINMAL angewendet – ist am HU-Tag schon eine HU-Fahrt eingetragen, wird sie übersprungen.'),
+      huGrid.el, h('div', { class: 'row' }, h('button', { class: 'btn pri', onclick: e => busy(e.target, async () => { await api('hu_save', { hu: huGrid.get() }); toast('HU-Einträge gespeichert.'); }) }, 'HU-Einträge speichern'), bA), out));
+}
+
+/* ================= Admin ================= */
+async function viewAdmin(main) {
+  const [U, ST] = await Promise.all([api('users'), api('settings')]);
+  const s = ST.settings;
+  // Benutzer
+  const uName = h('input'), uMail = h('input', { type: 'email' }), uPw = h('input', { type: 'text' }), uAdm = h('input', { type: 'checkbox' });
+  let editId = null;
+  const uTitle = h('h3', {}, 'Neuer Zugang');
+  const setForm = u => { editId = u ? u.id : null; uName.value = u ? u.username : ''; uName.readOnly = !!u; uMail.value = u ? u.email : ''; uPw.value = ''; uAdm.checked = !!(u && u.is_admin); uTitle.textContent = u ? 'Zugang bearbeiten: ' + u.username : 'Neuer Zugang'; };
+  const list = h('div', { class: 'tbl' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Benutzer'), h('th', {}, 'E-Mail'), h('th', {}, 'Admin'), h('th', {}, ''))),
+    h('tbody', {}, U.users.map(u => h('tr', {}, h('td', { class: 'ro' }, u.username), h('td', { class: 'ro' }, u.email || '–'), h('td', { class: 'ro' }, u.is_admin ? 'ja' : ''),
+      h('td', { class: 'ro' }, h('button', { class: 'btn sm', onclick: () => setForm(u) }, 'Bearbeiten'), ' ', u.id !== S.auth.user.id ? dangerBtn('Löschen', async () => { await api('user_delete', { id: u.id }); toast('Gelöscht.'); render(); }) : null))))));
+  // Mail
+  const m = {};
+  const inp = (k, attrs = {}) => (m[k] = h('input', { value: s[k] || '', ...attrs }));
+  m.mail_mode = sel([['off', 'Aus'], ['graph', 'Microsoft 365 (empfohlen)'], ['smtp', 'SMTP'], ['php', 'PHP mail() des Webservers']], s.mail_mode || 'off');
+  m.smtp_secure = sel([['tls', 'STARTTLS (Port 587)'], ['ssl', 'SSL (Port 465)'], ['none', 'keine']], s.smtp_secure || 'tls');
+  const smtpBox = h('div', { class: 'grid2' }, field('SMTP-Server', inp('smtp_host')), field('Port', inp('smtp_port', { placeholder: '587' })), field('Verschlüsselung', m.smtp_secure),
+    field('Benutzer', inp('smtp_user')), field('Passwort', inp('smtp_pass', { type: 'password', value: '', placeholder: s.smtp_pass_set ? '•••• gespeichert (leer = unverändert)' : '' })));
+  const graphBox = h('div', { class: 'grid2' }, field('Verzeichnis-ID (Tenant)', inp('graph_tenant')), field('Anwendungs-ID (Client)', inp('graph_client')),
+    field('Geheimer Clientschlüssel (Wert)', inp('graph_secret', { type: 'password', value: '', placeholder: s.graph_secret_set ? '•••• gespeichert (leer = unverändert)' : '' })));
+  const syncMail = () => { smtpBox.hidden = m.mail_mode.value !== 'smtp'; graphBox.hidden = m.mail_mode.value !== 'graph'; };
+  m.mail_mode.onchange = syncMail;
+  const testTo = h('input', { type: 'email', placeholder: S.auth.user.email || 'an@beispiel.at' });
+  const mailOut = h('div');
+  // Supabase
+  const sbUrl = h('input', { placeholder: 'https://xxxx.supabase.co' }), sbKey = h('input', { type: 'password', placeholder: 'service_role-Key aus den Streamlit-Secrets' });
+  const sbLog = h('div', { class: 'msg info', hidden: true });
+  const TABELLEN = ['users', 'settings', 'fahrzeuge', 'zeitraeume', 'fahrten', 'hu_corrections', 'orte', 'ort_koordinaten', 'distanz_matrix', 'jahres_start_km', 'generation_settings', 'system_config'];
+  const sbBtn = dangerBtn('Daten aus Supabase übernehmen', async () => {
+    sbLog.hidden = false; sbLog.textContent = '';
+    for (const t of TABELLEN) {
+      sbLog.textContent += `${t}: …`;
+      try { const d = await api('supabase_import', { url: sbUrl.value.trim(), key: sbKey.value.trim(), tabelle: t }); sbLog.textContent = sbLog.textContent.replace(/…$/, d.anzahl + ' übernommen\n'); }
+      catch (e) { sbLog.textContent = sbLog.textContent.replace(/…$/, 'FEHLER: ' + e.message + '\n'); sbLog.className = 'msg err'; return; }
+    }
+    sbLog.className = 'msg ok'; sbLog.textContent += '\nFertig! Alle Benutzer können sich mit ihrem bisherigen Passwort anmelden.';
+  });
+  main.replaceChildren(
+    h('div', { class: 'card' }, h('h2', {}, 'Zugänge'), list,
+      h('form', { style: 'display:grid;gap:10px', onsubmit: async e => {
+        e.preventDefault();
+        try { await api('user_save', { id: editId, username: uName.value, email: uMail.value, password: uPw.value, is_admin: uAdm.checked }); toast('Gespeichert. Bei neuem Passwort muss der Benutzer beim nächsten Login ein eigenes setzen.'); render(); } catch (er) { toast(er.message); }
+      } }, uTitle, h('div', { class: 'grid2' }, field('Benutzername', uName), field('E-Mail (für „Passwort vergessen“)', uMail), field('Passwort', uPw, 'neu: Start-Passwort · bearbeiten: leer = unverändert'), h('label', { class: 'chk' }, uAdm, 'Admin')),
+        h('div', { class: 'row' }, h('button', { class: 'btn pri' }, 'Speichern'), h('button', { class: 'btn', type: 'button', onclick: () => setForm(null) }, 'Neu')))),
+    h('div', { class: 'card' }, h('h2', {}, 'E-Mail-Versand'), h('p', { class: 'hint' }, 'Für „Passwort vergessen“. Microsoft 365 läuft über eine App-Registrierung (Mail.Send) – SMTP mit Passwort schaltet Microsoft Ende 2026 ab.'),
+      h('div', { class: 'grid2' }, field('Versandweg', m.mail_mode), field('Absender-Adresse', inp('mail_from', { type: 'email' })), field('Absender-Name', inp('mail_from_name', { placeholder: 'Fahrtenbuch' }))),
+      smtpBox, graphBox,
+      h('div', { class: 'row' }, h('button', { class: 'btn pri', onclick: e => busy(e.target, async () => { const d = {}; for (const k in m) d[k] = m[k].value; await api('settings_save', { settings: d }); toast('Gespeichert.'); }) }, 'Speichern'),
+        field('Test-Mail an', testTo), h('button', { class: 'btn', onclick: e => busy(e.target, async () => { mailOut.replaceChildren(); try { const d = await api('mail_test', { to: testTo.value }); mailOut.replaceChildren(msg('ok', d.message)); } catch (er) { mailOut.replaceChildren(msg('err', er.message)); } }) }, 'Test-Mail senden')), mailOut),
+    h('div', { class: 'card' }, h('h2', {}, 'Daten aus der alten Streamlit-App übernehmen'),
+      h('p', { class: 'hint' }, 'Holt alle Benutzer, Stammdaten, Fahrzeuge (IDs bleiben gleich), Zeiträume, Fahrten, HU-Einträge, Orte, Distanzen, Startwerte und Einstellungen aus Supabase. Achtung: ersetzt die entsprechenden Daten in dieser App. Passwörter bleiben gleich und werden beim ersten Login sicher umgestellt.'),
+      h('div', { class: 'grid2' }, field('Supabase-Adresse (SUPABASE_URL)', sbUrl), field('Supabase-Key (SUPABASE_KEY)', sbKey)), h('div', {}, sbBtn), sbLog));
+  syncMail();
+}
+
+/* ================= Start ================= */
+(async () => {
+  if (S.auth) { try { const d = await api('me'); S.auth.user = d.user; saveAuth(); } catch (e) { if (!S.auth) return; } }
+  render();
+})();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>

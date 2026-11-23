@@ -1,0 +1,17 @@
+# Fahrtenbuch - Webserver-Einstellungen
+Options -Indexes
+DirectoryIndex index.html
+AddType application/manifest+json .webmanifest
+<FilesMatch "\.(md|sql|json|txt|log)$">
+  Require all denied
+</FilesMatch>
+<FilesMatch "^(manifest\.webmanifest)$">
+  Require all granted
+</FilesMatch>
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "same-origin"
+  <FilesMatch "\.(html|php)$">
+    Header set Cache-Control "no-store"
+  </FilesMatch>
+</IfModule>
