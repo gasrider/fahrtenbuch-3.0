@@ -55,6 +55,49 @@ for i in range(365):
     km[f] += kd + (0 if kd else 12)
 
 
+# Falsche Strecke wie aus der alten App: "Neumarkt" wurde als Neumarkt in der Steiermark gefunden
+SB["orte"].append({"username": U, "ort": "Neumarkt"})
+SB["orte_distanz"].append({"username": U, "ort": "Neumarkt", "km_einfach": 291})
+SB["distanz_matrix"].append({"username": U, "ort_a": "Neumarkt", "ort_b": "Zell am Moos", "key_a": "neumarkt", "key_b": "zell am moos", "km": 291, "quelle": "osrm"})
+
+# ---------- nachgebaute OpenStreetMap-Dienste (Nominatim + OSRM) ----------
+ORTE = {  # Name -> Liste von Treffern (Reihenfolge wie Nominatim: der "wichtigste" zuerst)
+    "zell am moos": [(47.904, 13.315, "Zell am Moos, Oberösterreich")],
+    "straßwalchen": [(47.980, 13.257, "Straßwalchen, Salzburg")],
+    "eugendorf": [(47.867, 13.125, "Eugendorf, Salzburg")],
+    "mondsee": [(47.856, 13.350, "Mondsee, Oberösterreich")],
+    "henndorf": [(47.906, 13.188, "Henndorf am Wallersee, Salzburg")],
+    "neumarkt": [(47.073, 14.427, "Neumarkt in der Steiermark, Steiermark"), (47.945, 13.225, "Neumarkt am Wallersee, Salzburg")],
+    "weitweg": [(47.071, 15.439, "Weitweg, Graz, Steiermark")],
+    "weitweg bei salzburg": [(47.810, 13.040, "Weitweg, Salzburg")],
+}
+
+
+class FakeGeo(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path); q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+        if u.path.endswith("/search"):
+            name = q["q"].replace(", Österreich", "").strip().lower()
+            res = ORTE.get(name, [])
+            if q.get("bounded") == "1":
+                l, t, r, b = map(float, q["viewbox"].split(","))
+                res = [x for x in res if l <= x[1] <= r and b <= x[0] <= t]
+            res = res[:int(q.get("limit", 10))]
+            body = [{"lat": str(a), "lon": str(o), "display_name": d} for a, o, d in res]
+        else:  # /table/v1/driving/lon,lat;lon,lat?annotations=distance
+            import math
+            pts = [tuple(map(float, p.split(","))) for p in u.path.split("/")[-1].split(";")]
+            def hv(a, b):
+                p1, p2 = math.radians(a[1]), math.radians(b[1]); dl = math.radians(b[0] - a[0])
+                h = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+                return 2 * 6371000 * math.asin(math.sqrt(h)) * 1.3
+            body = {"code": "Ok", "distances": [[hv(a, b) for b in pts] for a in pts]}
+        data = json.dumps(body).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(data)
+
+
 class FakeSupabase(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
@@ -76,9 +119,10 @@ W = tempfile.mkdtemp(); APP = os.path.join(W, "fahrtenbuch"); os.mkdir(APP)
 shutil.copy(os.path.join(ROOT, "dist", "installieren.php"), APP)
 subprocess.run(["mysql", "-uroot", "-e", "DROP DATABASE IF EXISTS fb_e2e; CREATE DATABASE fb_e2e CHARACTER SET utf8mb4; "
                 "CREATE USER IF NOT EXISTS 'fbe2e'@'localhost' IDENTIFIED BY 'fbe2e'; GRANT ALL ON fb_e2e.* TO 'fbe2e'@'localhost';"], check=True)
-PORT, SBPORT = free_port(), free_port()
+PORT, SBPORT, GEOPORT = free_port(), free_port(), free_port()
 srv = subprocess.Popen(["php", "-S", f"127.0.0.1:{PORT}", "-t", W], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 sb = http.server.ThreadingHTTPServer(("127.0.0.1", SBPORT), FakeSupabase); threading.Thread(target=sb.serve_forever, daemon=True).start()
+geo = http.server.ThreadingHTTPServer(("127.0.0.1", GEOPORT), FakeGeo); threading.Thread(target=geo.serve_forever, daemon=True).start()
 time.sleep(1)
 BASE = f"http://127.0.0.1:{PORT}/fahrtenbuch/"
 
@@ -117,7 +161,7 @@ try:
     check(not os.path.exists(os.path.join(APP, "installieren.php")), "Installer hat sich selbst gelöscht")
     check(os.path.exists(os.path.join(APP, "server", "config.php")), "server/config.php erzeugt")
     with open(os.path.join(APP, "server", "config.php")) as f: cfg = f.read()
-    with open(os.path.join(APP, "server", "config.php"), "w") as f: f.write(cfg.replace(");", "  'test_supabase' => true,\n);"))
+    with open(os.path.join(APP, "server", "config.php"), "w") as f: f.write(cfg.replace(");", f"  'test_supabase' => true,\n  'nominatim_url' => 'http://127.0.0.1:{GEOPORT}',\n  'osrm_url' => 'http://127.0.0.1:{GEOPORT}',\n);"))
 
     c, d = api("login", {"username": "christian mayerhofer", "password": "falsch"})
     check(c == 401, "falsches Passwort abgelehnt")
@@ -134,7 +178,7 @@ try:
         check(c == 200, f"Supabase-Übernahme {t}: {d.get('anzahl', d)}")
     c, d = api("fz_get", token=T)
     check([f["id"] for f in d["fahrzeuge"]] == [69, 70, 71], "Fahrzeug-IDs 69/70/71 erhalten")
-    check(len(d["zeitraeume"]) == 3 and len(d["orte"]) == 3 and len(d["matrix"]) == 1, "Zeiträume, Orte, Matrix übernommen")
+    check(len(d["zeitraeume"]) == 3 and len(d["orte"]) == 4 and len(d["matrix"]) == 2, "Zeiträume, Orte, Matrix übernommen")
     check({o["ort"]: o["km_einfach"] for o in d["orte"]}["Eugendorf"] == 8, "km einfach übernommen")
     c, d = api("login", {"username": "christian mayerhofer", "password": "geheim123"})
     check(c == 200, "Installer-Passwort bleibt nach Übernahme gültig")
@@ -159,13 +203,45 @@ try:
         c2, n = api("jahr_get", query={"jahr": jahr + 1}, token=T)
         return brueche, k, {int(x): v for x, v in n["anker"].items()}, d
 
+    # ---------- Online-Distanzen / Orte-Check ----------
+    c, d = api("geo_liste", token=T)
+    check(any("Neumarkt" in x and "291" in x for x in d["lange_strecken"]), "Orte-Check zeigt die 291-km-Strecke als unplausibel")
+
+    def geo_lauf(alle_neu, zusatz=()):
+        c, plan = api("geo_plan", {"alle_neu": alle_neu, "zusatz": list(zusatz)}, T)
+        check(plan["zu_suchen"][0] == "Zell am Moos" if plan["zu_suchen"] else True, "Wohnort wird zuerst gesucht")
+        res = {}
+        for o in plan["zu_suchen"]:
+            c, r = api("geo_one", {"ort": o}, T); res[o] = r
+        c, r = api("geo_route", {"orte": plan["orte"], "nur_fehlende": not alle_neu}, T)
+        return res, r
+
+    res, r = geo_lauf(True, ["Weitweg"])
+    check("Neumarkt am Wallersee" in res["Neumarkt"]["treffer"], f"„Neumarkt“ = Neumarkt am Wallersee ({res['Neumarkt']['treffer']}, {res['Neumarkt']['km']} km)")
+    check(not res["Weitweg"]["ok"] and "zu weit" in res["Weitweg"]["hinweis"], "Ort 180 km entfernt wird abgelehnt mit Hinweis")
+    c, d = api("fz_get", token=T)
+    mx = {(m["ort_a"], m["ort_b"]): m["km"] for m in d["matrix"]}
+    check(max(mx.values()) < 120 and len(mx) >= 10, f"alle Strecken plausibel, max. {max(mx.values())} km ({len(mx)} Strecken)")
+    check({o["ort"]: o["km_einfach"] for o in d["orte"]}["Neumarkt"] < 40, "km einfach Neumarkt automatisch korrigiert")
+    c, r = api("geo_one", {"ort": "Weitweg", "suche": "Weitweg bei Salzburg"}, T)
+    check(r["ok"] and r["km"] < 60, f"eigener Suchbegriff im Orte-Check findet den richtigen Ort ({r['km']} km)")
+    c, d = api("geo_liste", token=T)
+    check(not d["lange_strecken"] and all(o["luftlinie"] is not None and o["luftlinie"] < 60 for o in d["orte"]), "Orte-Check danach ohne Warnungen")
+    # Fuer den Generator-Test die falsche Strecke nochmal hineinschreiben
+    c, d = api("fz_get", token=T)
+    d["matrix"] = [m for m in d["matrix"] if "Neumarkt" not in (m["ort_a"], m["ort_b"])] + [{"ort_a": "Neumarkt", "ort_b": "Zell am Moos", "km": 291}]
+    api("matrix_save", {"matrix": d["matrix"]}, T)
+
     # ---------- Generator ----------
     S = {"modus": "Ganzes Jahr", "generierungs_monat": 1, "prob_werktag": 75, "prob_feiertag_urlaub": 5, "target_km_min": 1650, "target_km_max": 2000,
          "hauptfahrzeug_name": "Audi Etron", "hauptfahrzeug_anteil": 70, "anzahl_wochen": 2, "verteilung": "2x2 Wochen", "start_woche_1": "2025-04-07",
-         "urlaub_fahrzeug_name": "VW Polo", "urlaub_km_min": 30, "urlaub_km_max": 80, "keyword_text": "Straßwalchen:Büro\nEugendorf:KFZ,Angebot\nMondsee:Antrag\nHenndorf:KB"}
+         "urlaub_fahrzeug_name": "VW Polo", "urlaub_km_min": 30, "urlaub_km_max": 80, "keyword_text": "Straßwalchen:Büro\nEugendorf:KFZ,Angebot\nMondsee:Antrag\nHenndorf:KB\nNeumarkt:Schaden"}
     c, d = api("generieren", {"jahr": 2025, "settings": S}, T)
     check(c == 200 and len(d["monate"]) == 12, "ganzes Jahr 2025 generiert")
     check("Henndorf" in d["fehlende"], "fehlende Distanz (Henndorf) wird gemeldet")
+    check(any("Neumarkt" in v for v in d["verdacht"]), f"falsche Neumarkt-Strecke (291 km) erkannt: {d['verdacht']}")
+    maxd = max(r["km_d"] for rows in d["monate"].values() for r in rows)
+    check(maxd < 360, f"keine Fahrt mit hunderten Dienst-km (max. {maxd} km)")
     br, ende, naechst, J = kette_ok(2025)
     check(br == 0, "Kette 2025 lückenlos")
     check(ende == naechst, "Jahresende 2025 = Startwert 2026")
@@ -218,8 +294,20 @@ try:
     hu_km = anker[69] + int(vor * 1.08)
     c, d = api("hu_save", {"hu": [{"fahrzeug_id": 69, "datum": "2025-06-10", "km_at_hu": hu_km, "werkstattort": "Mondsee", "stopps_vor_hu": "Eugendorf", "stopps_nach_hu": ""}]}, T)
     check(c == 200, "HU gespeichert")
+    vorher = {(r["datum"], r["fahrzeug_id"]): r for rows in J4["monate"].values() for r in rows}
     c, d = api("hu_anwenden", {}, T)
     check(c == 200, "HU angewendet")
+    c, JH = api("jahr_get", query={"jahr": 2025}, token=T)
+    geaendert = 0; gesamt = 0
+    for rows in JH["monate"].values():
+        for r in rows:
+            v = vorher.get((r["datum"], r["fahrzeug_id"]))
+            if not v or "(HU)" in r["route"] or r["fahrzeug_id"] != 69: continue
+            t = r["km_d"] + r["km_p"]; dm = int(r["dauer"][:2]) * 60 + int(r["dauer"][3:])
+            vt = v["km_d"] + v["km_p"]; vdm = int(v["dauer"][:2]) * 60 + int(v["dauer"][3:])
+            if dm and t / dm * 60 <= 100 and vdm and vt / vdm * 60 <= 100:  # nur Fahrten, die vorher plausibel waren
+                gesamt += 1; geaendert += r["dauer"] != v["dauer"]
+    check(gesamt > 50 and geaendert == 0, f"HU verändert keine Fahrzeiten ({gesamt} Fahrten geprüft)")
     br, _, _, J5 = kette_ok(2025)
     hu = [r for rows in J5["monate"].values() for r in rows if "(HU)" in r["route"]]
     hin = 25 + 15  # Zell->Eugendorf (Matrix 25) + Eugendorf->Mondsee (|8-15| -> min 5 -> 7?)

@@ -255,13 +255,18 @@ case 'matrix_save': {
 
 /* ---------- Online-Distanzen (OpenStreetMap: Nominatim + OSRM), schrittweise vom Browser gesteuert ---------- */
 case 'geo_plan': {
+  // Liste der zu suchenden Orte; der Wohnort zuerst, weil alle anderen um ihn herum gesucht werden
   $u = require_user(); $n = $u['username']; $st = stammdaten($n);
   $home = ort_clean((string) $st['wohnort']);
   if ($home === '') fail(400, 'Kein Wohnort in den Stammdaten – bitte zuerst eintragen.');
-  $liste = array_merge(array_column(q('SELECT ort FROM fb_orte WHERE username = ?', [$n])->fetchAll(), 'ort'), [$home, ort_clean((string) $st['dienstort'])],
-    array_map('trim', (array) ($in['zusatz'] ?? [])));
+  if (!empty($in['alle_neu'])) {
+    q('DELETE FROM fb_koordinaten WHERE username = ?', [$n]);
+    q("DELETE FROM fb_matrix WHERE username = ? AND quelle <> 'manuell'", [$n]);
+  }
   $alle = [];
-  foreach ($liste as $o) if (trim((string) $o) !== '' && !isset($alle[norm_ort($o)])) $alle[norm_ort($o)] = trim((string) $o);
+  foreach (array_merge([$home, ort_clean((string) $st['dienstort'])], array_column(q('SELECT ort FROM fb_orte WHERE username = ?', [$n])->fetchAll(), 'ort'),
+    array_map('trim', (array) ($in['zusatz'] ?? []))) as $o)
+    if (trim((string) $o) !== '' && !isset($alle[norm_ort($o)])) $alle[norm_ort($o)] = trim((string) $o);
   $bekannt = [];
   foreach (q('SELECT ort_key FROM fb_koordinaten WHERE username = ? AND lat IS NOT NULL', [$n])->fetchAll(PDO::FETCH_COLUMN) as $k) $bekannt[$k] = true;
   $offen = [];
@@ -269,19 +274,69 @@ case 'geo_plan': {
   out(['orte' => array_values($alle), 'zu_suchen' => $offen]);
 }
 case 'geo_one': {
-  $u = require_user(); $n = $u['username'];
+  // Ort auf der Karte suchen. Gesucht wird zuerst nur in der Region um den Wohnort; von
+  // mehreren Treffern gewinnt der naechstgelegene. Treffer weiter als 100 km werden
+  // abgelehnt (sonst landet z. B. "Neumarkt" in der Steiermark statt am Wallersee).
+  $u = require_user(); $n = $u['username']; $st = stammdaten($n);
   $ort = trim((string) ($in['ort'] ?? ''));
+  $suche = trim((string) ($in['suche'] ?? '')) ?: $ort;
   if ($ort === '') fail(400, 'Ort fehlt.');
-  $hit = null;
-  foreach ([["$ort, Österreich", 'at'], [$ort, 'at,de'], [$ort, '']] as $i => [$qq, $cc]) {
-    if ($i > 0) usleep(1100000); // Nominatim: max. 1 Anfrage pro Sekunde
-    $url = 'https://nominatim.openstreetmap.org/search?' . http_build_query(array_filter(['q' => $qq, 'format' => 'json', 'limit' => 1, 'countrycodes' => $cc]));
-    [$code, $res] = http_get_json($url, ['User-Agent: Fahrtenbuch-App/3.0 (OpenStreetMap-Distanzen)', 'Accept-Language: de'], 20);
-    if ($code === 200 && !empty($res[0]['lat'])) { $hit = $res[0]; break; }
+  $home = ort_clean((string) $st['wohnort']);
+  $istHome = norm_ort($ort) === norm_ort($home);
+  $base = rtrim((string) cfg('nominatim_url', 'https://nominatim.openstreetmap.org'), '/');
+  $frage = function (array $p) use ($base) {
+    [$code, $res] = http_get_json("$base/search?" . http_build_query($p + ['format' => 'json', 'accept-language' => 'de']),
+      ['User-Agent: Fahrtenbuch-App/3.0 (OpenStreetMap-Distanzen)'], 20);
+    return ($code === 200 && is_array($res)) ? array_values(array_filter($res, function ($r) { return isset($r['lat'], $r['lon']); })) : [];
+  };
+  $h = $istHome ? null : q('SELECT lat, lon FROM fb_koordinaten WHERE username = ? AND ort_key = ? AND lat IS NOT NULL', [$n, norm_ort($home)])->fetch();
+  $hit = null; $entf = null; $hinweis = '';
+  if (!$h) {
+    foreach ([['q' => "$suche, Österreich", 'countrycodes' => 'at'], ['q' => $suche, 'countrycodes' => 'at,de']] as $i => $p) {
+      if ($i > 0) usleep(1100000); // Nominatim: max. 1 Anfrage pro Sekunde
+      $r = $frage($p + ['limit' => 1]);
+      if ($r) { $hit = $r[0]; break; }
+    }
+    if (!$istHome && $hit) $hinweis = 'Wohnort noch nicht gefunden – Ort ohne Umkreis-Prüfung gesucht.';
+  } else {
+    $hl = (float) $h['lat']; $ho = (float) $h['lon'];
+    $box = sprintf('%.4F,%.4F,%.4F,%.4F', $ho - 1.2, $hl + 0.8, $ho + 1.2, $hl - 0.8);
+    $treffer = $frage(['q' => $suche, 'viewbox' => $box, 'bounded' => 1, 'countrycodes' => 'at,de', 'limit' => 10]);
+    if (!$treffer) { usleep(1100000); $treffer = $frage(['q' => $suche, 'countrycodes' => 'at,de', 'limit' => 10]); }
+    foreach ($treffer as $t) {
+      $d = luftlinie_km($hl, $ho, (float) $t['lat'], (float) $t['lon']);
+      if ($entf === null || $d < $entf) { $entf = $d; $hit = $t; }
+    }
+    if ($hit && $entf > MAX_ORT_ENTFERNUNG_KM) {
+      $hinweis = 'Nur ' . $hit['display_name'] . ' gefunden (' . round($entf) . ' km Luftlinie) – zu weit weg. Bitte einen genaueren Suchbegriff eintragen, z. B. „' . $ort . ' am …“ oder mit Postleitzahl.';
+      $hit = null;
+    }
   }
+  $alt = q('SELECT lat, lon FROM fb_koordinaten WHERE username = ? AND ort_key = ?', [$n, norm_ort($ort)])->fetch();
   q('REPLACE INTO fb_koordinaten (username, ort_key, ort, lat, lon, display_name) VALUES (?,?,?,?,?,?)',
     [$n, norm_ort($ort), $ort, $hit ? (float) $hit['lat'] : null, $hit ? (float) $hit['lon'] : null, $hit ? (string) $hit['display_name'] : '']);
-  out(['ok' => (bool) $hit, 'ort' => $ort, 'treffer' => $hit ? (string) $hit['display_name'] : '']);
+  // Neue Koordinaten -> alte (berechnete) Strecken dieses Orts verwerfen, sie werden neu berechnet
+  if ($alt && (!$hit || abs((float) $alt['lat'] - (float) $hit['lat']) > 0.001 || abs((float) $alt['lon'] - (float) $hit['lon']) > 0.001))
+    q("DELETE FROM fb_matrix WHERE username = ? AND (key_a = ? OR key_b = ?) AND quelle <> 'manuell'", [$n, norm_ort($ort), norm_ort($ort)]);
+  out(['ok' => (bool) $hit, 'ort' => $ort, 'treffer' => $hit ? (string) $hit['display_name'] : '', 'km' => $entf !== null && $hit ? round($entf) : null, 'hinweis' => $hinweis]);
+}
+case 'geo_liste': {
+  // Orte-Check: wo wurde jeder Ort gefunden und wie weit liegt er vom Wohnort?
+  $u = require_user(); $n = $u['username']; $st = stammdaten($n);
+  $home = ort_clean((string) $st['wohnort']);
+  $k = [];
+  foreach (q('SELECT ort_key, ort, lat, lon, display_name FROM fb_koordinaten WHERE username = ?', [$n])->fetchAll() as $r) $k[$r['ort_key']] = $r;
+  $h = $k[norm_ort($home)] ?? null;
+  $orte = [];
+  foreach (array_merge([$home, ort_clean((string) $st['dienstort'])], array_column(q('SELECT ort FROM fb_orte WHERE username = ? ORDER BY ort', [$n])->fetchAll(), 'ort')) as $o) {
+    if ($o === '' || isset($orte[norm_ort($o)])) continue;
+    $r = $k[norm_ort($o)] ?? null;
+    $d = ($r && $r['lat'] !== null && $h && $h['lat'] !== null) ? round(luftlinie_km((float) $h['lat'], (float) $h['lon'], (float) $r['lat'], (float) $r['lon'])) : null;
+    $orte[norm_ort($o)] = ['ort' => $o, 'gefunden' => $r ? (string) $r['display_name'] : null, 'luftlinie' => $d];
+  }
+  $lang = [];
+  foreach (q('SELECT ort_a, ort_b, km FROM fb_matrix WHERE username = ? AND km > ? ORDER BY km DESC', [$n, PLAUSI_LEG_KM])->fetchAll() as $r) $lang[] = "{$r['ort_a']} – {$r['ort_b']}: {$r['km']} km";
+  out(['orte' => array_values($orte), 'grenze' => PLAUSI_LEG_KM, 'lange_strecken' => $lang]);
 }
 case 'geo_route': {
   // Alle Strecken auf einmal ueber den OSRM-Table-Dienst; Notfall: Luftlinie x 1,25
@@ -297,7 +352,8 @@ case 'geo_route': {
   $alt = [];
   foreach (q('SELECT key_a, key_b, quelle FROM fb_matrix WHERE username = ?', [$n])->fetchAll() as $r) $alt["{$r['key_a']}|{$r['key_b']}"] = $r['quelle'];
   $coords = implode(';', array_map(function ($p) { return sprintf('%.6F,%.6F', $p['lon'], $p['lat']); }, $pkt));
-  [$code, $res, $err] = http_get_json("https://router.project-osrm.org/table/v1/driving/$coords?annotations=distance", ['User-Agent: Fahrtenbuch-App/3.0'], 60);
+  $osrm = rtrim((string) cfg('osrm_url', 'https://router.project-osrm.org'), '/');
+  [$code, $res, $err] = http_get_json("$osrm/table/v1/driving/$coords?annotations=distance", ['User-Agent: Fahrtenbuch-App/3.0'], 60);
   $dm = ($code === 200 && ($res['code'] ?? '') === 'Ok') ? $res['distances'] : null;
   $neu = 0; $geschaetzt = 0; $cnt = count($pkt);
   for ($i = 0; $i < $cnt; $i++) for ($j = $i + 1; $j < $cnt; $j++) {
@@ -367,7 +423,7 @@ case 'generieren': {
   $p = $s + ['distanzen' => distanzen($n), 'matrix' => matrix($n),
     'urlaubstage' => $anz > 0 ? urlaubs_tage($anz, (string) ($s['verteilung'] ?? '1x4 Wochen'), to_iso($s['start_woche_1'] ?? null)) : []];
   $monate = $modus === 'Ganzes Jahr' ? range(1, 12) : [$monat];
-  [$neu, $fehlende] = generiere_monate($jahr, $monate, stammdaten($n), $fz, zeitraeume($n), $kw, $p);
+  [$neu, $fehlende, $verdacht] = generiere_monate($jahr, $monate, stammdaten($n), $fz, zeitraeume($n), $kw, $p);
   // Mit gespeicherten Monaten zusammenfuehren, Kette IMMER ab dem Jahres-Anker neu aufbauen
   $daten = $modus === 'Ganzes Jahr' ? [] : lade_jahr($n, $jahr);
   foreach ($neu as $m => $rows) $daten[$m] = $rows;
@@ -375,7 +431,7 @@ case 'generieren': {
   [$daten, $ende] = baue_kette_neu($daten, $anker);
   speichere_jahr($n, $jahr, $daten);
   setze_start_km($n, $jahr + 1, $ende);
-  out(['ok' => true, 'monate' => (object) $daten, 'jahre' => jahre($n), 'flags' => (object) pruefung($daten), 'fehlende' => $fehlende,
+  out(['ok' => true, 'monate' => (object) $daten, 'jahre' => jahre($n), 'flags' => (object) pruefung($daten), 'fehlende' => $fehlende, 'verdacht' => $verdacht,
     'ende' => (object) $ende, 'anker' => (object) $anker, 'generiert' => $monate]);
 }
 case 'monat_save': {

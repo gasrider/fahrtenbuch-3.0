@@ -25,6 +25,9 @@ tests/ui.mjs             ← Playwright gegen laufende Instanz (KEEP=1 python3 t
 - Taggeld nur bei km_d > 0.
 - Passwort vergessen: erst Mail senden, dann Passwort ändern.
 - Alte Streamlit-Passwörter: `sha256:<hex>` in fb_users.pass_hash, beim Login auf password_hash umgestellt.
+- Ortssuche (geo_one): Wohnort zuerst; andere Orte nur im Umkreis (viewbox), nächster Treffer gewinnt, > 100 km Luftlinie wird abgelehnt. Grund: „Neumarkt“ landete in der Steiermark (≈ 290 km) → Fahrten mit hunderten Dienst-km.
+- Strecken > PLAUSI_LEG_KM (120 km) ignoriert Generator und HU (Warnung „verdacht“); Prüfung meldet Dienstfahrten > 360 km.
+- HU skaliert nur km, nie die Fahrzeit (sonst 14:00-Fahrten); Fahrzeit nur bei > 100 km/h verlängert.
 - Schema-Änderungen idempotent in `create_schema()` (läuft auch beim Update).
 
 ## Definition of Done

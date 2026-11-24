@@ -15,6 +15,12 @@ const SCALE_MIN = 0.70;
 const SCALE_MAX = 1.70;
 const HU_FAKTOR_MIN = 0.5;
 const HU_FAKTOR_MAX = 2.0;
+// Plausibilitaet: eine einfache Strecke zwischen zwei Orten der Region ist nie laenger.
+// Laengere Werte stammen fast immer von einer falsch gefundenen Ortschaft
+// (z. B. "Neumarkt" -> Neumarkt in der Steiermark statt Neumarkt am Wallersee).
+const PLAUSI_LEG_KM = 120;
+// Orte werden nur akzeptiert, wenn sie hoechstens so weit (Luftlinie) vom Wohnort liegen
+const MAX_ORT_ENTFERNUNG_KM = 100;
 
 /* ---------- Helfer ---------- */
 function to_int($v, ?int $default = 0): ?int {
@@ -40,6 +46,18 @@ function to_iso($v): ?string {
   if (preg_match('/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/', $s, $m)) return checkdate((int) $m[2], (int) $m[1], (int) $m[3]) ? sprintf('%04d-%02d-%02d', $m[3], $m[2], $m[1]) : null;
   if (is_numeric($s) && (float) $s > 20000 && (float) $s < 80000) return gmdate('Y-m-d', (int) round(((float) $s - 25569) * 86400));
   return null;
+}
+function luftlinie_km(float $lat1, float $lon1, float $lat2, float $lon2): float {
+  $p1 = deg2rad($lat1); $p2 = deg2rad($lat2); $dl = deg2rad($lon2 - $lon1);
+  $h = sin(($p2 - $p1) / 2) ** 2 + cos($p1) * cos($p2) * sin($dl / 2) ** 2;
+  return 2 * 6371 * asin(min(1.0, sqrt($h)));
+}
+// Unplausible Distanzen sammeln (fuer den Hinweis nach Generierung/HU)
+function verdacht(?string $text = null): array {
+  static $liste = [];
+  if ($text === null) { $l = array_keys($liste); $liste = []; return $l; }
+  $liste[$text] = true;
+  return [];
 }
 function norm_ort($n): string { return mb_strtolower(trim((string) $n), 'UTF-8'); }
 function mkey(string $a, string $b): string { $a = norm_ort($a); $b = norm_ort($b); return strcmp($a, $b) <= 0 ? "$a|$b" : "$b|$a"; }
@@ -130,6 +148,8 @@ function pruefe_monat(array $rows): array {
     $dm = dauer_min($r['dauer'] ?? '');
     if ($total > 0 && $dm > 0 && $total / $dm * 60 > 130)
       $flags[] = "$d: Unrealistische Geschwindigkeit – $total km in {$r['dauer']} (~" . round($total / $dm * 60) . ' km/h).';
+    if (to_int($r['km_d']) > 2 * PLAUSI_LEG_KM * 1.5)
+      $flags[] = "$d: Dienstfahrt mit " . to_int($r['km_d']) . ' km – ungewöhnlich lang, Distanzen der Orte prüfen.';
     if ($total === 0 && !ist_ignore_route($r['route'] ?? ''))
       $flags[] = "$d: Dienstreise „" . mb_substr((string) $r['route'], 0, 30) . '…“ eingetragen, aber 0 km.';
     if ($total > 0 && dauer_min($r['ank'] ?? '') < dauer_min($r['abf'] ?? ''))
@@ -154,9 +174,17 @@ function korrigiere_geschwindigkeit(array $rows, int $max = 100): array {
 }
 
 /* ---------- Generator (Monatsziele v5: echte Streuung) ---------- */
+function matrix_wert(array $matrix, string $a, string $b): ?int {
+  $na = norm_ort($a); $nb = norm_ort($b);
+  if ($na === '' || $nb === '' || $na === $nb || empty($matrix[mkey($a, $b)])) return null;
+  $km = (int) $matrix[mkey($a, $b)];
+  if ($km > PLAUSI_LEG_KM) { verdacht("$a – $b: $km km"); return null; }
+  return $km;
+}
 function leg_km(array $dist, array $matrix, string $a, string $b): int {
   $na = norm_ort($a); $nb = norm_ort($b);
-  if ($na !== '' && $nb !== '' && $na !== $nb && !empty($matrix[mkey($a, $b)])) return (int) $matrix[mkey($a, $b)];
+  $m = matrix_wert($matrix, $a, $b);
+  if ($m !== null) return $m;
   if (!array_key_exists($na, $dist) || !array_key_exists($nb, $dist)) return rint(15, 35);
   return max(abs($dist[$na] - $dist[$nb]), MIN_LEG_KM);
 }
@@ -190,7 +218,10 @@ function generiere_monate(int $jahr, array $monate, array $st, array $fahrzeuge,
   $matrixOrte = [];
   foreach (array_keys($matrix) as $k) foreach (explode('|', $k) as $o) $matrixOrte[$o] = true;
   $dist = [];
-  foreach (($p['distanzen'] ?? []) as $o => $km) $dist[norm_ort($o)] = max(0, (int) $km);
+  foreach (($p['distanzen'] ?? []) as $o => $km) {
+    if ((int) $km > PLAUSI_LEG_KM) { verdacht("$o: $km km einfach vom Wohnort"); continue; }
+    $dist[norm_ort($o)] = max(0, (int) $km);
+  }
   $dist[norm_ort($home)] = 0;
   if (!isset($dist[norm_ort($buero)])) $dist[norm_ort($buero)] = max(0, $entf);
   $fehlende = [];
@@ -300,7 +331,7 @@ function generiere_monate(int $jahr, array $monate, array $st, array $fahrzeuge,
           if ($wd === $zielTag && !$sonderDone) {
             // 2-woechentliche Sonderfahrt ueber den Dienstort (Buero)
             $sonderDone = true;
-            $kmP = !empty($matrix[mkey($home, $buero)]) ? (int) $matrix[mkey($home, $buero)] : max(1, $entf);
+            $kmP = matrix_wert($matrix, $home, $buero) ?? max(1, $entf);
             [$orte, $txt] = $stopps(rint(1, 4));
             $route = implode(' - ', array_merge([$home, "$buero (Büro)"], $txt, [$home]));
             $kmD = tour_km($dist, $matrix, $home, array_merge([$buero], $orte));
@@ -327,13 +358,14 @@ function generiere_monate(int $jahr, array $monate, array $st, array $fahrzeuge,
     $result[$monat] = korrigiere_geschwindigkeit($rows);
   }
   $f = array_keys($fehlende); sort($f);
-  return [$result, $f];
+  return [$result, $f, verdacht()];
 }
 
 /* ---------- HU-Korrektur ---------- */
 function hu_leg(array $matrix, array $dist, string $a, string $b): ?int {
   $na = norm_ort($a); $nb = norm_ort($b);
-  if ($na !== '' && $nb !== '' && $na !== $nb && !empty($matrix[mkey($a, $b)])) return (int) $matrix[mkey($a, $b)];
+  $m = matrix_wert($matrix, $a, $b);
+  if ($m !== null) return $m;
   if (!array_key_exists($na, $dist) || !array_key_exists($nb, $dist)) return null;
   return max(abs($dist[$na] - $dist[$nb]), 5);
 }
@@ -357,17 +389,18 @@ function hu_kilometer(array $dist, array $matrix, string $home, string $werk, ar
   else { $h = hu_leg($matrix, $dist, $werk, $home) ?? max($dw, 5); $kmP += $h; $nachweg += $h; }
   return [max($kmD, 10), $kmP, $hin, $nachweg];
 }
-// Skaliert km der angegebenen Fahrten; mit $ziel wird der Rundungsrest km-genau verteilt
+// Skaliert km der angegebenen Fahrten; mit $ziel wird der Rundungsrest km-genau verteilt.
+// Die Fahrzeit bleibt (Kundentermine dauern gleich lang) - nur wenn die km bei dieser
+// Zeit unrealistisch schnell waeren, wird die Fahrzeit verlaengert.
 function hu_skaliere(array &$jahr, array $refs, float $f, ?int $ziel): void {
   foreach ($refs as [$m, $i]) {
-    $r = &$jahr[$m][$i];
-    $r['km_d'] = (int) round(to_int($r['km_d']) * $f);
-    $r['km_p'] = (int) round(to_int($r['km_p']) * $f);
-    $dm = dauer_min($r['dauer']);
-    if ($dm > 0) { $r['dauer'] = hhmm(min(max((int) ($dm * $f), 10), 840)); $r['ank'] = hhmm(min(dauer_min($r['abf']) + dauer_min($r['dauer']), 23 * 60 + 59)); }
-    unset($r);
+    $jahr[$m][$i]['km_d'] = (int) round(to_int($jahr[$m][$i]['km_d']) * $f);
+    $jahr[$m][$i]['km_p'] = (int) round(to_int($jahr[$m][$i]['km_p']) * $f);
   }
-  if ($ziel === null) return;
+  if ($ziel !== null) hu_rest_verteilen($jahr, $refs, $ziel);
+  foreach ($refs as [$m, $i]) $jahr[$m][$i] = korrigiere_geschwindigkeit([$jahr[$m][$i]])[0];
+}
+function hu_rest_verteilen(array &$jahr, array $refs, int $ziel): void {
   $sum = 0; $kand = [];
   foreach ($refs as [$m, $i]) { $sum += $jahr[$m][$i]['km_d'] + $jahr[$m][$i]['km_p']; if ($jahr[$m][$i]['km_d'] > 0) $kand[] = [$m, $i]; }
   usort($kand, function ($a, $b) use ($jahr) { return $jahr[$b[0]][$b[1]]['km_d'] <=> $jahr[$a[0]][$a[1]]['km_d']; });
@@ -439,6 +472,7 @@ function wende_hu_an(array $jahr, array $anchor, array $namen, array $korrekture
     $msg[] = 'Abfahrt am HU-Tag: ' . number_format($kmHu - $hin, 0, ',', '.') . " km (= HU-Stand minus $hin km Weg zur Werkstatt).";
     $msg[] = sprintf('Faktor vor HU: %.3f | nach HU: %.3f (Jahressumme bleibt erhalten).', $fv, $fn);
   }
+  foreach (verdacht() as $v) $msg[] = "WARNUNG: Unplausible Distanz ignoriert ($v) – im Tab „Fahrzeuge & Orte“ unter „Orte-Check“ prüfen.";
   [$jahr, $km] = baue_kette_neu($jahr, $anchor);
   return [$jahr, $km, $msg];
 }

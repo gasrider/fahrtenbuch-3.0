@@ -74,6 +74,7 @@ td.x{width:32px;text-align:center}
 td.x button{border:0;background:none;color:var(--muted);font-size:1rem;padding:4px}
 tr.del td{opacity:.35;text-decoration:line-through}
 tr.we td.ro:first-child{color:var(--warn)}
+tr.lang td{background:var(--hibg)}
 .num input{text-align:right;font-variant-numeric:tabular-nums}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
 .stat{background:var(--sunk);border-radius:10px;padding:8px 12px}
@@ -350,6 +351,7 @@ async function viewGen(main) {
     J = { ...J, monate: d.monate, jahre: d.jahre, flags: d.flags };
     const ende = J.fahrzeuge.filter(f => d.ende[f.id] !== undefined).map(f => `• ${f.bezeichnung}: ${fmt(d.ende[f.id])} km`).join('\n');
     ergebnis.replaceChildren(msg('ok', `Fahrten für ${d.generiert.length} Monat(e) generiert und gespeichert. Startwerte für ${S.jahr + 1} vorbelegt.\n\nEndkilometerstand pro Fahrzeug (31.12.):\n${ende}`),
+      d.verdacht && d.verdacht.length ? msg('err', 'Unplausible Distanzen ignoriert (falscher Ort auf der Karte?):\n' + d.verdacht.map(v => '• ' + v).join('\n') + '\nBitte im Tab „Fahrzeuge & Orte“ → Orte-Check korrigieren und neu generieren.') : null,
       d.fehlende.length ? msg('warn', 'Keine Distanz gepflegt für: ' + d.fehlende.join(', ') + ' – dafür wurden Zufalls-KM verwendet. Im Tab „Fahrzeuge & Orte“ die Distanzen online berechnen und neu generieren.') : null);
     zeigeMonate(d.generiert[d.generiert.length - 1]);
   }) }, '');
@@ -396,7 +398,7 @@ async function viewFz(main) {
   const zrGrid = grid([{ key: 'fahrzeug_id', label: 'Fahrzeug', type: 'select', options: fzOpts }, { key: 'von', label: 'Von', type: 'date' }, { key: 'bis', label: 'Bis', type: 'date' }], D.zeitraeume);
   let filter = '';
   const ortGrid = grid([{ key: 'ort', label: 'Ort', width: '200px' }, { key: 'km_einfach', label: 'km einfach vom Wohnort', type: 'number', width: '90px' }], D.orte, { neu: () => ({ ort: '', km_einfach: 0 }) });
-  const mxGrid = grid([{ key: 'ort_a', label: 'Ort A', type: 'ro' }, { key: 'ort_b', label: 'Ort B', type: 'ro' }, { key: 'km', label: 'km', type: 'number', width: '80px' }, { key: 'quelle', label: 'Quelle', type: 'ro' }], D.matrix, { add: false, maxh: '50vh' });
+  const mxGrid = grid([{ key: 'ort_a', label: 'Ort A', type: 'ro' }, { key: 'ort_b', label: 'Ort B', type: 'ro' }, { key: 'km', label: 'km', type: 'number', width: '80px' }, { key: 'quelle', label: 'Quelle', type: 'ro' }], D.matrix, { add: false, maxh: '50vh', rowClass: r => r.km > 120 ? 'lang' : '' });
   const mxFilter = h('input', { placeholder: 'Ort suchen…', oninput: e => { filter = e.target.value.toLowerCase(); mxGrid.set(alleMx().filter(r => !filter || (r.ort_a + ' ' + r.ort_b).toLowerCase().includes(filter))); } });
   let mxAlle = D.matrix.map(r => ({ ...r }));
   const alleMx = () => { const sicht = new Map(mxGrid.get().map(r => [r.ort_a + '|' + r.ort_b, r])); return mxAlle.map(r => sicht.get(r.ort_a + '|' + r.ort_b) || r); };
@@ -406,24 +408,48 @@ async function viewFz(main) {
   const zusatz = h('input', { placeholder: 'z. B. Werkstätten, kommagetrennt' });
   const nurFehl = h('input', { type: 'checkbox', checked: true });
   const bar = h('i'); const status = h('p', { class: 'hint' }); const geoOut = h('div', { style: 'display:grid;gap:6px' });
-  const geoBtn = h('button', { class: 'btn pri', onclick: () => busy(geoBtn, async () => {
+  // Suchlauf: Orte suchen (Wohnort zuerst), dann alle Strecken berechnen
+  const geoLauf = async (opt) => {
     geoOut.replaceChildren();
-    const plan = await api('geo_plan', { zusatz: zusatz.value.split(',').map(s => s.trim()).filter(Boolean) });
-    const nicht = [];
+    const plan = await api('geo_plan', { zusatz: zusatz.value.split(',').map(s => s.trim()).filter(Boolean), alle_neu: !!opt.alle_neu });
+    const probleme = [];
     for (let i = 0; i < plan.zu_suchen.length; i++) {
       const o = plan.zu_suchen[i];
       status.textContent = `Ort ${i + 1}/${plan.zu_suchen.length} auf der Karte suchen: ${o}`; bar.style.width = (i / Math.max(1, plan.zu_suchen.length) * 80) + '%';
-      const r = await api('geo_one', { ort: o }); if (!r.ok) nicht.push(o);
+      const r = await api('geo_one', { ort: o });
+      if (!r.ok) probleme.push(`${o}: ` + (r.hinweis || 'nicht gefunden – Schreibweise prüfen.')); else if (r.hinweis) probleme.push(`${o}: ${r.hinweis}`);
       await new Promise(r => setTimeout(r, 1100)); // OpenStreetMap: max. 1 Anfrage pro Sekunde
     }
     status.textContent = 'Fahrstrecken zwischen allen Orten berechnen…'; bar.style.width = '90%';
-    const r = await api('geo_route', { orte: plan.orte, nur_fehlende: nurFehl.checked });
+    const r = await api('geo_route', { orte: plan.orte, nur_fehlende: opt.nur_fehlende });
     bar.style.width = '100%'; status.textContent = 'Fertig.';
-    geoOut.replaceChildren(msg('ok', `${r.neu} Strecken berechnet` + (r.osrm ? ' (echte Fahrstrecken).' : '.') + (r.aktualisiert.length ? '\n„km einfach“ aktualisiert: ' + r.aktualisiert.join(', ') : '') + '\n\nWichtig: Jahr im Generator neu generieren, damit die neuen Kilometer einfließen.'),
+    geoOut.replaceChildren(msg('ok', `${r.neu} Strecken berechnet` + (r.osrm ? ' (echte Fahrstrecken).' : '.') + (r.aktualisiert.length ? '\n„km einfach“ aktualisiert: ' + r.aktualisiert.join(', ') : '') + '\n\nWichtig: Unten im Orte-Check kontrollieren, dann das Jahr im Generator neu generieren.'),
       r.geschaetzt ? msg('warn', `${r.geschaetzt} Strecke(n) konnten nicht geroutet werden und wurden aus der Luftlinie geschätzt (× 1,25).`) : null,
-      nicht.length ? msg('warn', 'Nicht gefunden: ' + nicht.join(', ') + ' – bitte Schreibweise prüfen oder Distanz manuell eintragen.') : null,
+      probleme.length ? msg('warn', 'Bitte prüfen:\n' + probleme.map(p => '• ' + p).join('\n')) : null,
       h('button', { class: 'btn sm', onclick: () => render() }, 'Tabellen neu laden'));
-  }) }, 'Distanzen online berechnen');
+  };
+  const geoBtn = h('button', { class: 'btn pri', onclick: () => busy(geoBtn, () => geoLauf({ nur_fehlende: nurFehl.checked })) }, 'Distanzen online berechnen');
+  const neuBtn = dangerBtn('Alle Orte neu suchen und alle Strecken neu berechnen', () => busy(neuBtn, () => geoLauf({ alle_neu: true, nur_fehlende: false })));
+  // Orte-Check: wo liegt jeder Ort wirklich?
+  const C = await api('geo_liste');
+  const checkBox = h('div', { style: 'display:grid;gap:8px' },
+    C.lange_strecken.length ? msg('err', `Unplausible Strecken (über ${C.grenze} km) – werden vom Generator ignoriert:\n` + C.lange_strecken.slice(0, 12).map(x => '• ' + x).join('\n') + (C.lange_strecken.length > 12 ? '\n…' : '')) : null,
+    h('div', { class: 'tbl', style: 'max-height:55vh' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Ort'), h('th', {}, 'Gefunden als'), h('th', {}, 'Luftlinie vom Wohnort'), h('th', {}, 'Genauer suchen als'), h('th', {}, ''))),
+      h('tbody', {}, C.orte.map(o => {
+        const weit = o.luftlinie !== null && o.luftlinie > 60;
+        const such = h('input', { placeholder: 'genauerer Name oder PLZ + Ort', 'aria-label': 'Suchbegriff ' + o.ort });
+        const b = h('button', { class: 'btn sm', onclick: () => busy(b, async () => {
+          const plan = await api('geo_plan', {});
+          const r = await api('geo_one', { ort: o.ort, suche: such.value.trim() });
+          if (!r.ok) { toast(r.hinweis || 'Nicht gefunden – anderen Suchbegriff probieren.'); return; }
+          await api('geo_route', { orte: plan.orte, nur_fehlende: true });
+          toast(`${o.ort}: ${r.treffer} (${r.km ?? '?'} km Luftlinie). Strecken neu berechnet.`); render();
+        }) }, 'Neu suchen');
+        return h('tr', {}, h('td', { class: 'ro' }, o.ort),
+          h('td', { class: 'ro', style: 'white-space:normal;max-width:420px;' + (o.gefunden === null || o.gefunden === '' ? 'color:var(--hi)' : '') }, o.gefunden === null ? 'noch nicht gesucht' : (o.gefunden || 'nicht gefunden')),
+          h('td', { class: 'ro', style: weit ? 'color:var(--hi);font-weight:700' : '' }, o.luftlinie === null ? '–' : o.luftlinie + ' km' + (weit ? ' ⚠' : '')),
+          h('td', {}, such), h('td', { class: 'ro' }, b));
+      })))));
 
   main.replaceChildren(
     h('div', { class: 'card' }, h('h2', {}, 'Fahrzeuge'), h('p', { class: 'hint' }, 'IDs bleiben beim Speichern stabil. Excel-Importe werden über die Bezeichnung zugeordnet (Excel-IDs werden ignoriert).'),
@@ -449,7 +475,10 @@ async function viewFz(main) {
     h('div', { class: 'card' }, h('h2', {}, 'Distanzen automatisch berechnen (Online-Karte)'),
       h('p', { class: 'hint' }, 'Sucht alle Orte (gespeicherte Orte, Wohnort, Dienstort) auf OpenStreetMap und berechnet die echten Fahrstrecken zwischen allen Orten. Kein Schlüssel nötig. Vorher die Orte speichern. Manuell geänderte Strecken werden nie überschrieben.'),
       h('div', { class: 'grid2' }, field('Zusätzliche Orte', zusatz), h('label', { class: 'chk' }, nurFehl, 'Nur fehlende Strecken berechnen')),
-      h('div', {}, geoBtn), h('div', { class: 'prog' }, bar), status, geoOut),
+      h('div', { class: 'row' }, geoBtn, neuBtn), h('div', { class: 'prog' }, bar), status, geoOut),
+    h('div', { class: 'card' }, h('h2', {}, 'Orte-Check'),
+      h('p', { class: 'hint' }, 'Zeigt, welcher Ort auf der Karte gefunden wurde. Rot = weiter als 60 km vom Wohnort oder nicht gefunden – dann einen genaueren Suchbegriff eintragen (z. B. „Neumarkt am Wallersee“ oder mit Postleitzahl) und „Neu suchen“.'),
+      checkBox),
     h('div', { class: 'card' }, h('h2', {}, 'Distanz-Matrix (Ort zu Ort)'), h('p', { class: 'hint' }, `${D.matrix.length} Strecken. Jede gilt in beide Richtungen. km ändern und speichern überschreibt den Online-Wert (Quelle „manuell“).`),
       mxFilter, mxGrid.el, h('div', {}, save('Matrix speichern', async () => {
         const vis = new Set(mxGrid.get().map(r => r.ort_a + '|' + r.ort_b));
