@@ -19,3 +19,10 @@ Neue `installieren.php` per WebFTP in den Ordner `fahrtenbuch` laden und im Brow
 
 ## Sicherheitstest
 https://va-strasswalchen.at/fahrtenbuch/server/config.php muss eine leere Seite oder „403 Forbidden“ zeigen.
+
+## Falsche Kilometer finden und reparieren
+1. **Stammdaten → Sicherung herunterladen.**
+2. **Fahrzeuge & Orte → „Distanzen online berechnen“** – sucht alle Orte aus Orte-Liste, Keywords, HU und gespeicherten Fahrten.
+3. **Orte-Check** (gleicher Tab): Rote Zeilen oben. Für jeden roten Ort einen genaueren Suchbegriff eintragen (z. B. „Neumarkt am Wallersee“, „Vöcklamarkt“ statt „V´markt“) → „Neu suchen“.
+4. **Prüfung → Gesamt-Abgleich starten** (pro Jahr): listet alle Fahrten, deren km nicht zu ihren Orten passen.
+5. **„… Fahrt(en) automatisch korrigieren“**: setzt die km richtig, baut die Kilometerkette neu und richtet die HU wieder genau auf den HU-Stand aus.

@@ -277,7 +277,23 @@ async function viewStamm(main) {
       e.preventDefault();
       try { await api('password', { old: pwAlt.value, new: pwNeu.value }); pwAlt.value = pwNeu.value = ''; toast('Passwort geändert. Andere Geräte wurden abgemeldet.'); } catch (er) { toast(er.message); }
     } }, h('h2', {}, 'Mein Passwort ändern'), h('div', { class: 'grid2' }, field('Bisheriges Passwort', pwAlt), field('Neues Passwort (mind. 6 Zeichen)', pwNeu)),
-      h('div', {}, h('button', { class: 'btn' }, 'Passwort ändern'))));
+      h('div', {}, h('button', { class: 'btn' }, 'Passwort ändern'))),
+    h('div', { class: 'card' }, h('h2', {}, 'Sicherung'),
+      h('p', { class: 'hint' }, 'Lädt alle deine Daten (Fahrten, Fahrzeuge, Orte, Distanzen, HU, Einstellungen) als Datei herunter. Am besten vor dem Neu-Generieren, Korrigieren oder Anwenden der HU. Wiederherstellen ersetzt deine aktuellen Daten durch die der Datei.'),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn pri', onclick: e => busy(e.target, async () => {
+          const d = await api('sicherung');
+          const url = URL.createObjectURL(new Blob([JSON.stringify(d)], { type: 'application/json' }));
+          const a = h('a', { href: url, download: `Fahrtenbuch_Sicherung_${new Date().toISOString().slice(0, 10)}.json` }); document.body.append(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+        }) }, 'Sicherung herunterladen'),
+        dangerBtn('Sicherung wiederherstellen…', async () => {
+          const inp = h('input', { type: 'file', accept: '.json,application/json' });
+          const file = await new Promise(r => { inp.onchange = () => r(inp.files[0]); inp.click(); });
+          if (!file) return;
+          try { const d = await api('sicherung_laden', JSON.parse(await file.text())); toast(`Wiederhergestellt (${d.anzahl} Einträge).`); }
+          catch (er) { toast(er.message.includes('JSON') ? 'Die Datei ist keine gültige Sicherung.' : er.message); }
+        }))));
   vorschau();
 }
 
@@ -434,7 +450,8 @@ async function viewFz(main) {
   const C = await api('geo_liste');
   const checkBox = h('div', { style: 'display:grid;gap:8px' },
     C.lange_strecken.length ? msg('err', `Unplausible Strecken (über ${C.grenze} km) – werden vom Generator ignoriert:\n` + C.lange_strecken.slice(0, 12).map(x => '• ' + x).join('\n') + (C.lange_strecken.length > 12 ? '\n…' : '')) : null,
-    h('div', { class: 'tbl', style: 'max-height:55vh' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Ort'), h('th', {}, 'Gefunden als'), h('th', {}, 'Luftlinie vom Wohnort'), h('th', {}, 'Genauer suchen als'), h('th', {}, ''))),
+    h('p', { class: 'hint' }, `${C.orte.length} Orte aus allen Quellen (Orte-Liste, Keywords aller Jahre, HU, gespeicherte Fahrten). Problemfälle stehen oben.`),
+    h('div', { class: 'tbl', style: 'max-height:60vh' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Ort'), h('th', {}, 'Verwendet in'), h('th', {}, 'Gefunden als'), h('th', {}, 'Luftlinie'), h('th', {}, 'km einfach'), h('th', {}, 'Genauer suchen als'), h('th', {}, ''))),
       h('tbody', {}, C.orte.map(o => {
         const weit = o.luftlinie !== null && o.luftlinie > 60;
         const such = h('input', { placeholder: 'genauerer Name oder PLZ + Ort', 'aria-label': 'Suchbegriff ' + o.ort });
@@ -445,9 +462,11 @@ async function viewFz(main) {
           await api('geo_route', { orte: plan.orte, nur_fehlende: true });
           toast(`${o.ort}: ${r.treffer} (${r.km ?? '?'} km Luftlinie). Strecken neu berechnet.`); render();
         }) }, 'Neu suchen');
-        return h('tr', {}, h('td', { class: 'ro' }, o.ort),
+        const kmWeit = o.km_einfach !== null && o.km_einfach > C.grenze;
+        return h('tr', {}, h('td', { class: 'ro' }, o.ort), h('td', { class: 'ro', style: 'white-space:normal' }, o.quellen.join(', ')),
           h('td', { class: 'ro', style: 'white-space:normal;max-width:420px;' + (o.gefunden === null || o.gefunden === '' ? 'color:var(--hi)' : '') }, o.gefunden === null ? 'noch nicht gesucht' : (o.gefunden || 'nicht gefunden')),
           h('td', { class: 'ro', style: weit ? 'color:var(--hi);font-weight:700' : '' }, o.luftlinie === null ? '–' : o.luftlinie + ' km' + (weit ? ' ⚠' : '')),
+          h('td', { class: 'ro', style: kmWeit ? 'color:var(--hi);font-weight:700' : '' }, o.km_einfach === null ? '–' : o.km_einfach + ' km' + (kmWeit ? ' ⚠' : '')),
           h('td', {}, such), h('td', { class: 'ro' }, b));
       })))));
 
@@ -477,7 +496,7 @@ async function viewFz(main) {
       h('div', { class: 'grid2' }, field('Zusätzliche Orte', zusatz), h('label', { class: 'chk' }, nurFehl, 'Nur fehlende Strecken berechnen')),
       h('div', { class: 'row' }, geoBtn, neuBtn), h('div', { class: 'prog' }, bar), status, geoOut),
     h('div', { class: 'card' }, h('h2', {}, 'Orte-Check'),
-      h('p', { class: 'hint' }, 'Zeigt, welcher Ort auf der Karte gefunden wurde. Rot = weiter als 60 km vom Wohnort oder nicht gefunden – dann einen genaueren Suchbegriff eintragen (z. B. „Neumarkt am Wallersee“ oder mit Postleitzahl) und „Neu suchen“.'),
+      h('p', { class: 'hint' }, 'Zeigt, welcher Ort auf der Karte gefunden wurde. Rot = nicht gesucht/gefunden, weiter als 60 km vom Wohnort oder „km einfach“ über 120 km. Lösung: oben „Distanzen online berechnen“ (sucht auch alle Orte aus Keywords, HU und Fahrten) oder einen genaueren Suchbegriff eintragen (z. B. „Neumarkt am Wallersee“ oder mit Postleitzahl) und „Neu suchen“.'),
       checkBox),
     h('div', { class: 'card' }, h('h2', {}, 'Distanz-Matrix (Ort zu Ort)'), h('p', { class: 'hint' }, `${D.matrix.length} Strecken. Jede gilt in beide Richtungen. km ändern und speichern überschreibt den Online-Wert (Quelle „manuell“).`),
       mxFilter, mxGrid.el, h('div', {}, save('Matrix speichern', async () => {
@@ -526,7 +545,30 @@ async function viewPruef(main) {
       (J.flags[m] || []).length ? msg('err', `${J.flags[m].length} Auffälligkeit(en):\n` + J.flags[m].map(f => '• ' + f).join('\n')) : msg('ok', 'Keine Auffälligkeiten in diesem Monat.'),
       monatsEditor(J, m, d => { J = { ...J, monate: d.monate, flags: d.flags }; zeige(m); }));
   };
-  main.replaceChildren(h('div', { class: 'card' },
+  const abOut = h('div', { style: 'display:grid;gap:8px' });
+  const abBtn = h('button', { class: 'btn pri', onclick: () => busy(abBtn, async () => {
+    const d = await api('abgleich', { jahr: J.jahr });
+    const teile = [msg(d.auffaellig.length ? 'warn' : 'ok', `${d.gepruefte} Dienstfahrten ${d.jahr} geprüft: ` + (d.auffaellig.length ? `${d.auffaellig.length} auffällig in ${d.monate.map(m => MONATE[m - 1]).join(', ')}.` : 'alle passen zu ihren Orten.'))];
+    if (d.ort_probleme.length) teile.push(msg('err', 'Orte/Strecken mit unplausibler Entfernung (falscher Ort auf der Karte?):\n' + d.ort_probleme.map(x => '• ' + x).join('\n') + '\nIm Tab „Fahrzeuge & Orte“ → Orte-Check neu suchen.'));
+    if (d.unbekannte_orte.length) teile.push(msg('warn', 'Orte ohne bekannte Entfernung (Fahrten damit können nicht geprüft werden): ' + d.unbekannte_orte.join(', ') + '\nIm Tab „Fahrzeuge & Orte“ auf „Distanzen online berechnen“ tippen.'));
+    if (d.auffaellig.length) {
+      teile.push(h('div', { class: 'tbl', style: 'max-height:50vh' }, h('table', {}, h('thead', {}, h('tr', {}, ['Datum', 'Fahrzeug', 'Route', 'km', 'erwartet', 'Grund'].map(x => h('th', {}, x)))),
+        h('tbody', {}, d.auffaellig.map(a => h('tr', {}, h('td', { class: 'ro' }, dDE(a.datum)), h('td', { class: 'ro' }, a.fahrzeug), h('td', { class: 'ro', style: 'white-space:normal;min-width:260px' }, a.route),
+          h('td', { class: 'ro', style: 'color:var(--hi);font-weight:700' }, fmt(a.ist)), h('td', { class: 'ro' }, a.erwartet ? 'ca. ' + fmt(a.erwartet) : '?'), h('td', { class: 'ro', style: 'white-space:normal;min-width:220px' }, a.grund)))))));
+      const korrBar = d.auffaellig.filter(a => a.erwartet).length;
+      if (!korrBar) { teile.push(msg('info', 'Für diese Fahrten ist die richtige Strecke noch nicht bekannt. Zuerst im Tab „Fahrzeuge & Orte“ die Orte richtig suchen lassen (Orte-Check), dann den Abgleich wiederholen – danach können sie automatisch korrigiert werden.')); abOut.replaceChildren(...teile); return; }
+      const fix = dangerBtn(`${korrBar} Fahrt(en) automatisch korrigieren`, () => busy(fix, async () => {
+        const r = await api('abgleich', { jahr: J.jahr, korrigieren: true });
+        abOut.replaceChildren(msg('ok', r.meldungen.join('\n').replace(/\*\*/g, '')), h('button', { class: 'btn sm', onclick: () => render() }, 'Ansicht neu laden'));
+      }));
+      teile.push(h('div', {}, fix), h('p', { class: 'hint' }, 'Korrigieren setzt die Kilometer dieser Fahrten auf den Wert, der zu ihren Orten passt. Danach wird die Kilometerkette neu aufgebaut und eine gespeicherte HU des Jahres wieder genau auf den HU-Stand ausgerichtet. Vorher im Orte-Check alle Orte richtig suchen lassen.'));
+    }
+    abOut.replaceChildren(...teile);
+  }) }, `Gesamt-Abgleich ${J.jahr} starten`);
+  main.replaceChildren(h('div', { class: 'card' }, h('h2', {}, 'Gesamt-Abgleich'),
+    h('p', { class: 'hint' }, 'Prüft jede gespeicherte Dienstfahrt des Jahres: passen die Kilometer zu den Orten der Route? Findet z. B. Fahrten, die wegen eines falsch gefundenen Orts hunderte Kilometer haben.'),
+    h('div', {}, abBtn), abOut),
+    h('div', { class: 'card' },
     h('p', { class: 'hint' }, 'Findet unplausible Einträge (unrealistische Geschwindigkeit, Ankunft vor Abfahrt, Dienstreise mit 0 km, doppelte Abfahrtszeiten). Korrekturen hier manuell – der Inhalt muss immer der Realität entsprechen.'),
     h('div', { class: 'row' }, field('Jahr', sel(jahrOptionen(J.jahre), J.jahr, { onchange: e => { S.pruefJahr = +e.target.value; render(); } }))),
     flagsBox(J.flags), box));

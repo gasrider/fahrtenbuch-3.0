@@ -166,7 +166,10 @@ function korrigiere_geschwindigkeit(array $rows, int $max = 100): array {
     $t = to_int($r['km_d']) + to_int($r['km_p']); $dm = dauer_min($r['dauer']);
     if ($t <= 0 || $dm <= 0 || $t / $dm * 60 <= $max) continue;
     $neu = min((int) ($t / $max * 60) + 20, 840);
-    $r['ank'] = hhmm(min(dauer_min($r['abf']) + $neu, 23 * 60 + 59));
+    // Ankunft spaetestens 23:59 - sonst die Abfahrt vorziehen, damit Dauer und Zeiten zusammenpassen
+    $abf = min(dauer_min($r['abf']), 23 * 60 + 59 - $neu);
+    $r['abf'] = hhmm(max(0, $abf));
+    $r['ank'] = hhmm(max(0, $abf) + $neu);
     $r['dauer'] = hhmm($neu);
   }
   unset($r);
@@ -178,7 +181,7 @@ function matrix_wert(array $matrix, string $a, string $b): ?int {
   $na = norm_ort($a); $nb = norm_ort($b);
   if ($na === '' || $nb === '' || $na === $nb || empty($matrix[mkey($a, $b)])) return null;
   $km = (int) $matrix[mkey($a, $b)];
-  if ($km > PLAUSI_LEG_KM) { verdacht("$a – $b: $km km"); return null; }
+  if ($km > PLAUSI_LEG_KM) { [$x, $y] = strcmp($na, $nb) <= 0 ? [$a, $b] : [$b, $a]; verdacht("$x – $y: $km km"); return null; }
   return $km;
 }
 function leg_km(array $dist, array $matrix, string $a, string $b): int {
@@ -414,12 +417,18 @@ function hu_rest_verteilen(array &$jahr, array $refs, int $ziel): void {
   }
 }
 /** $korrekturen: [[fahrzeug_id, datum, km_at_hu, werkstattort, stopps_vor(array), stopps_nach(array)]] */
-function wende_hu_an(array $jahr, array $anchor, array $namen, array $korrekturen, string $wohnort, array $distanzen, array $matrix): array {
+// $neu = true: HU auch dann neu berechnen, wenn schon eine HU-Fahrt eingetragen ist (nach einer
+// Korrektur der Fahrten). Das ist unbedenklich, weil der Faktor immer auf den echten HU-Stand
+// zielt und nicht auf den alten Faktor aufbaut.
+function wende_hu_an(array $jahr, array $anchor, array $namen, array $korrekturen, string $wohnort, array $distanzen, array $matrix, bool $neu = false): array {
   $msg = [];
   $home = ort_clean($wohnort);
   $home = preg_replace('/^[A-Za-z]?-?\d{4,5}\s+/', '', $home);
   $dist = [];
-  foreach ($distanzen as $o => $km) $dist[norm_ort($o)] = max(0, (int) $km);
+  foreach ($distanzen as $o => $km) {
+    if ((int) $km > PLAUSI_LEG_KM) { verdacht("$o: $km km einfach vom Wohnort"); continue; }
+    $dist[norm_ort($o)] = max(0, (int) $km);
+  }
   if ($home !== '') $dist[norm_ort($home)] = 0;
   foreach ($jahr as $m => $rows) $jahr[$m] = sort_fahrten($rows);
 
@@ -438,7 +447,7 @@ function wende_hu_an(array $jahr, array $anchor, array $namen, array $korrekture
       else { $refTag[] = [$m, $i]; $sumTag += $k; }
     }
     if (!$refVor && !$refNach && !$refTag) { $msg[] = 'Keine Fahrten dieses Fahrzeugs gefunden – übersprungen.'; continue; }
-    foreach ($refTag as [$m, $i]) if (strpos((string) $jahr[$m][$i]['route'], '(HU)') !== false) {
+    if (!$neu) foreach ($refTag as [$m, $i]) if (strpos((string) $jahr[$m][$i]['route'], '(HU)') !== false) {
       $msg[] = 'Bereits angewendet (HU-Fahrt am HU-Tag vorhanden) – übersprungen, Kilometer bleiben unverändert.';
       continue 2;
     }
@@ -459,8 +468,8 @@ function wende_hu_an(array $jahr, array $anchor, array $namen, array $korrekture
     $teile = array_merge([$home], $vor, ["$werk (HU)"], $nach, [$home]);
     $huRoute = implode(' - ', array_values(array_filter($teile, 'strlen')));
     $huDauer = 90 + (count($vor) + 1 + count($nach)) * 20;
-    $hu_row = ['fahrzeug_id' => $fid, 'fahrzeug' => $name, 'route' => $huRoute, 'km_d' => $huD, 'km_p' => $huP,
-      'abf' => '08:30', 'ank' => hhmm(8 * 60 + 30 + $huDauer), 'dauer' => hhmm($huDauer)];
+    $hu_row = korrigiere_geschwindigkeit([['fahrzeug_id' => $fid, 'fahrzeug' => $name, 'route' => $huRoute, 'km_d' => $huD, 'km_p' => $huP,
+      'abf' => '08:30', 'ank' => hhmm(8 * 60 + 30 + $huDauer), 'dauer' => hhmm($huDauer)]])[0];
     $monatHu = (int) substr($hu, 5, 2);
     if ($refTag) { [$m, $i] = $refTag[0]; $jahr[$m][$i] = array_merge($jahr[$m][$i], $hu_row); }
     else {
@@ -556,6 +565,97 @@ function verteile_privat_km(array $jahr, int $fid, string $fname, int $total, ar
   foreach ($jahr as $rows) foreach ($rows as $r) if ($r['fahrzeug_id'] === $fid && $r['km_p'] > 0) { $summe += $r['km_p']; $tg++; }
   $msg[] = "Jahres-Summe privat {$fname}: " . number_format($summe, 0, ',', '.') . " km auf $tg Tagen.";
   return [$jahr, $km, $msg];
+}
+
+/* ---------- Abgleich: passen die gespeicherten Kilometer zu den Orten der Route? ---------- */
+// Orte einer Route: "Feiertag: A - B (Zweck) - C" -> [A, B, C]
+function route_orte(string $route): array {
+  $r = preg_replace('/^(Feiertag|Urlaub):\s*/u', '', trim($route));
+  if (strpos($r, ' - ') === false) return [];
+  $out = [];
+  foreach (explode(' - ', $r) as $t) {
+    $t = trim(preg_replace('/\s*\([^)]*\)\s*$/u', '', $t));
+    if ($t !== '') $out[] = $t;
+  }
+  return $out;
+}
+function median(array $v): float { if (!$v) return 1.0; sort($v); $n = count($v); return $n % 2 ? $v[intdiv($n, 2)] : ($v[$n / 2 - 1] + $v[$n / 2]) / 2; }
+/**
+ * Prueft jede Dienstfahrt: Strecke laut Orte/Matrix (Rohwert) mal dem ueblichen Faktor des
+ * Monats (Monatsziel + HU) ergibt den erwarteten Wert. Auffaellig ist, was weit darueber liegt,
+ * ueber 360 km hat oder eine unplausible Strecke (> 120 km) enthaelt.
+ * Rueckgabe: [auffaellige, unbekannte_orte, gepruefte_anzahl]
+ */
+function fahrten_abgleich(array $jahr, array $matrix, array $distanzen, string $home): array {
+  $dist = [];
+  foreach ($distanzen as $o => $km) if ((int) $km > 0 && (int) $km <= PLAUSI_LEG_KM) $dist[norm_ort($o)] = (int) $km;
+  $dist[norm_ort($home)] = 0;
+  $strecken = [];
+  $leg = function (string $a, string $b, array &$probleme) use ($matrix, $dist, &$strecken): ?int {
+    $na = norm_ort($a); $nb = norm_ort($b);
+    if ($na === $nb) return MIN_LEG_KM;
+    $m = $matrix[mkey($a, $b)] ?? null;
+    if ($m !== null) {
+      if ($m <= PLAUSI_LEG_KM) return (int) $m;
+      [$x, $y] = strcmp($na, $nb) <= 0 ? [$a, $b] : [$b, $a];
+      $strecken["$x – $y: $m km"] = true; // unplausible Strecke: Fahrt gilt als nicht pruefbar
+      return null;
+    }
+    if (isset($dist[$na], $dist[$nb])) return max(abs($dist[$na] - $dist[$nb]), MIN_LEG_KM);
+    return null;
+  };
+  $pruef = []; $unbekannt = []; $n = 0;
+  foreach ($jahr as $m => $rows) foreach ($rows as $i => $r) {
+    $hu = strpos((string) $r['route'], '(HU)') !== false;
+    $ist = to_int($r['km_d']) + ($hu ? to_int($r['km_p']) : 0);
+    if (to_int($r['km_d']) <= 0) continue;
+    $orte = route_orte((string) $r['route']);
+    $probleme = []; $roh = 0; $fehlt = [];
+    for ($k = 1; $k < count($orte); $k++) {
+      $l = $leg($orte[$k - 1], $orte[$k], $probleme);
+      if ($l === null) { foreach ([$orte[$k - 1], $orte[$k]] as $o) if (!isset($dist[norm_ort($o)]) && !isset($matrix[mkey($orte[$k - 1], $orte[$k])])) $fehlt[$o] = true; $roh = null; break; }
+      $roh += $l;
+    }
+    $n++;
+    foreach (array_keys($fehlt) as $o) $unbekannt[$o] = true;
+    $pruef[] = ['monat' => $m, 'i' => $i, 'hu' => $hu, 'ist' => $ist, 'roh' => count($orte) >= 2 ? $roh : null, 'probleme' => $probleme, 'fehlt' => array_keys($fehlt)];
+  }
+  // ueblicher Faktor pro Monat (nur normale Fahrten mit bekannter Strecke)
+  $faktor = [];
+  foreach ($pruef as $p) if (!$p['hu'] && $p['roh'] && !$p['probleme']) $faktor[$p['monat']][] = $p['ist'] / $p['roh'];
+  $alleF = array_merge([], ...array_values($faktor ?: [[1.0]]));
+  $fJahr = median($alleF);
+  $auff = [];
+  foreach ($pruef as $p) {
+    $r = $jahr[$p['monat']][$p['i']];
+    $f = isset($faktor[$p['monat']]) && count($faktor[$p['monat']]) >= 5 ? median($faktor[$p['monat']]) : $fJahr;
+    $gruende = $p['probleme'];
+    $erw = $p['roh'] ? (int) round($p['roh'] * ($p['hu'] ? 1 : $f)) : null;
+    if ($p['ist'] > 2 * PLAUSI_LEG_KM * 1.5) $gruende[] = "{$p['ist']} km an einem Tag";
+    elseif ($erw && $p['ist'] > max(2.2 * $erw, $erw + 60)) $gruende[] = "{$p['ist']} km statt ca. $erw km für diese Orte";
+    if (!$gruende) continue;
+    $auff[] = ['monat' => $p['monat'], 'i' => $p['i'], 'datum' => $r['datum'], 'fahrzeug' => $r['fahrzeug'], 'route' => $r['route'],
+      'ist' => $p['ist'], 'erwartet' => $erw, 'hu' => $p['hu'], 'grund' => implode('; ', array_unique($gruende)), 'fehlt' => $p['fehlt']];
+  }
+  $u = array_keys($unbekannt); sort($u);
+  return [$auff, $u, $n, array_keys($strecken)];
+}
+// Auffaellige Fahrten auf den erwarteten Wert setzen (Fahrten ohne berechenbare Strecke: auf den
+// Monatsschnitt pro Stopp). Rueckgabe: [jahr, anzahl_korrigiert]
+function fahrten_korrigieren(array $jahr, array $auff): array {
+  $k = 0;
+  foreach ($auff as $a) {
+    if (!$a['erwartet']) continue;
+    $r = &$jahr[$a['monat']][$a['i']];
+    if ($a['hu']) {
+      $f = $a['erwartet'] / max(1, $a['ist']);
+      $r['km_d'] = max(1, (int) round(to_int($r['km_d']) * $f)); $r['km_p'] = (int) round(to_int($r['km_p']) * $f);
+    } else $r['km_d'] = max(1, $a['erwartet']);
+    $r = korrigiere_geschwindigkeit([$r])[0];
+    unset($r);
+    $k++;
+  }
+  return [$jahr, $k];
 }
 
 /* ---------- Keywords ---------- */

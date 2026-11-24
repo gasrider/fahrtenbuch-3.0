@@ -5,7 +5,7 @@ Import, Benutzer. Braucht: php, MariaDB (mysql -uroot), python3 (+ openpyxl).
 
     python3 tests/e2e.py
 """
-import hashlib, http.server, io, json, os, shutil, socket, subprocess, sys, tempfile, threading, time, urllib.parse, urllib.request
+import re, hashlib, http.server, io, json, os, shutil, socket, subprocess, sys, tempfile, threading, time, urllib.parse, urllib.request
 from collections import defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,6 +53,15 @@ for i in range(365):
                           "fahrzeug": {69: "Audi Etron", 70: "VW Polo", 71: "VW T6.1"}[f], "route": "Zell am Moos - Eugendorf (KFZ) - Zell am Moos" if kd else "Sonntag",
                           "km_d": kd, "km_p": 0 if kd else 12, "abf": "08:00", "ank": "17:30" if kd else "10:20", "dauer": "09:30" if kd else "00:20", "abfahrt_km": km[f]})
     km[f] += kd + (0 if kd else 12)
+for r in SB["fahrten"]:
+    if r["monat"] == 12 and r["km_d"] and time.strptime(r["datum"], "%Y-%m-%d").tm_wday in (1, 3):
+        r["route"] = "Zell am Moos - Neumarkt (Schaden) - Zell am Moos"; r["km_d"] = 613
+km = {69: 24659, 70: 206371, 71: 78607}
+for r in sorted(SB["fahrten"], key=lambda r: r["datum"]):
+    r["abfahrt_km"] = km[r["fahrzeug_id"]]; km[r["fahrzeug_id"]] += r["km_d"] + r["km_p"]
+SB["hu_corrections"] = [{"username": U, "fahrzeug_id": 70, "datum": "2026-12-20", "km_at_hu": 216000, "werkstattort": "Mondsee", "stopps_vor_hu": "", "stopps_nach_hu": ""}]
+SB["generation_settings"][0]["settings_json"] = json.dumps({"target_km_min": 1650, "target_km_max": 2000, "modus": "Ganzes Jahr", "keyword_text": "Eugendorf:KFZ\nNeumarkt:Schaden\nSchleedorf:Antrag"})
+ORTE_EXTRA = True
 
 
 # Falsche Strecke wie aus der alten App: "Neumarkt" wurde als Neumarkt in der Steiermark gefunden
@@ -70,6 +79,8 @@ ORTE = {  # Name -> Liste von Treffern (Reihenfolge wie Nominatim: der "wichtigs
     "neumarkt": [(47.073, 14.427, "Neumarkt in der Steiermark, Steiermark"), (47.945, 13.225, "Neumarkt am Wallersee, Salzburg")],
     "weitweg": [(47.071, 15.439, "Weitweg, Graz, Steiermark")],
     "weitweg bei salzburg": [(47.810, 13.040, "Weitweg, Salzburg")],
+    "schleedorf": [(47.953, 13.150, "Schleedorf, Salzburg")],
+    "frankenmarkt": [(47.986, 13.420, "Frankenmarkt, Oberösterreich")],
 }
 
 
@@ -77,7 +88,7 @@ class FakeGeo(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
     def do_GET(self):
-        u = urllib.parse.urlparse(self.path); q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+        u = urllib.parse.urlsplit(self.path); q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
         if u.path.endswith("/search"):
             name = q["q"].replace(", Österreich", "").strip().lower()
             res = ORTE.get(name, [])
@@ -93,7 +104,10 @@ class FakeGeo(http.server.BaseHTTPRequestHandler):
                 p1, p2 = math.radians(a[1]), math.radians(b[1]); dl = math.radians(b[0] - a[0])
                 h = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
                 return 2 * 6371000 * math.asin(math.sqrt(h)) * 1.3
-            body = {"code": "Ok", "distances": [[hv(a, b) for b in pts] for a in pts]}
+            src = [int(x) for x in q["sources"].split(";")] if "sources" in q else range(len(pts))
+            dst = [int(x) for x in q["destinations"].split(";")] if "destinations" in q else range(len(pts))
+            check(len(pts) <= 100, "OSRM-Anfrage mit höchstens 100 Orten")
+            body = {"code": "Ok", "distances": [[hv(pts[a], pts[b]) for b in dst] for a in src]}
         data = json.dumps(body).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(data)
 
@@ -161,7 +175,7 @@ try:
     check(not os.path.exists(os.path.join(APP, "installieren.php")), "Installer hat sich selbst gelöscht")
     check(os.path.exists(os.path.join(APP, "server", "config.php")), "server/config.php erzeugt")
     with open(os.path.join(APP, "server", "config.php")) as f: cfg = f.read()
-    with open(os.path.join(APP, "server", "config.php"), "w") as f: f.write(cfg.replace(");", f"  'test_supabase' => true,\n  'nominatim_url' => 'http://127.0.0.1:{GEOPORT}',\n  'osrm_url' => 'http://127.0.0.1:{GEOPORT}',\n);"))
+    with open(os.path.join(APP, "server", "config.php"), "w") as f: f.write(cfg.replace(");", f"  'test_supabase' => true,\n  'osrm_block' => 3,\n  'nominatim_url' => 'http://127.0.0.1:{GEOPORT}',\n  'osrm_url' => 'http://127.0.0.1:{GEOPORT}',\n);"))
 
     c, d = api("login", {"username": "christian mayerhofer", "password": "falsch"})
     check(c == 401, "falsches Passwort abgelehnt")
@@ -203,8 +217,18 @@ try:
         c2, n = api("jahr_get", query={"jahr": jahr + 1}, token=T)
         return brueche, k, {int(x): v for x, v in n["anker"].items()}, d
 
+    # ---------- Gesamt-Abgleich findet die kaputten Neumarkt-Fahrten ----------
+    c, A = api("abgleich", {"jahr": 2026}, T)
+    neum = [a for a in A["auffaellig"] if "Neumarkt" in a["route"]]
+    check(c == 200 and len(neum) >= 6 and all(a["monat"] == 12 for a in A["auffaellig"]), f"Abgleich findet {len(neum)} Neumarkt-Fahrten (nur Dezember)")
+    check(any("Neumarkt: 291" in x for x in A["ort_probleme"]), "Abgleich meldet Neumarkt mit 291 km einfach")
+
     # ---------- Online-Distanzen / Orte-Check ----------
     c, d = api("geo_liste", token=T)
+    quellen = {o["ort"]: o["quellen"] for o in d["orte"]}
+    check("Schleedorf" in quellen and "Keywords" in quellen["Schleedorf"], "Orte-Check zeigt auch Orte aus den Keywords")
+    check("Fahrten" in quellen.get("Neumarkt", []) and "Mondsee" in quellen and "HU" in quellen["Mondsee"], "… und Orte aus Fahrten und HU")
+    check(d["orte"][0]["ort"] in ("Neumarkt", "Schleedorf"), f"Problemfälle stehen oben ({d['orte'][0]['ort']})")
     check(any("Neumarkt" in x and "291" in x for x in d["lange_strecken"]), "Orte-Check zeigt die 291-km-Strecke als unplausibel")
 
     def geo_lauf(alle_neu, zusatz=()):
@@ -221,7 +245,19 @@ try:
     check(not res["Weitweg"]["ok"] and "zu weit" in res["Weitweg"]["hinweis"], "Ort 180 km entfernt wird abgelehnt mit Hinweis")
     c, d = api("fz_get", token=T)
     mx = {(m["ort_a"], m["ort_b"]): m["km"] for m in d["matrix"]}
-    check(max(mx.values()) < 120 and len(mx) >= 10, f"alle Strecken plausibel, max. {max(mx.values())} km ({len(mx)} Strecken)")
+    check(max(mx.values()) < 120 and len(mx) == 15, f"alle Strecken plausibel, max. {max(mx.values())} km ({len(mx)} Strecken, blockweise berechnet)")
+    check(any("Schleedorf" in k for k in mx), "Keyword-Ort Schleedorf hat Strecken bekommen")
+    # Abgleich + Korrektur der Dezember-Fahrten 2026
+    c, A = api("abgleich", {"jahr": 2026}, T)
+    check(len(A["auffaellig"]) >= 6 and not A["ort_probleme"], f"nach Ortssuche: {len(A['auffaellig'])} Fahrten mit zu vielen km erkannt")
+    c, R = api("abgleich", {"jahr": 2026, "korrigieren": True}, T)
+    check(c == 200 and "Danach keine auffälligen Fahrten mehr." in R["meldungen"], "Korrektur: danach keine auffälligen Fahrten: " + " | ".join(R["meldungen"][:2]))
+    c, J26 = api("jahr_get", query={"jahr": 2026}, token=T)
+    neum = [r for r in J26["monate"]["12"] if "Neumarkt" in r["route"] and "(HU)" not in r["route"]]
+    check(neum and max(r["km_d"] for r in neum) < 80, f"Neumarkt-Fahrten jetzt {sorted({r['km_d'] for r in neum})} km")
+    hu = [r for r in J26["monate"]["12"] if "(HU)" in r["route"]][0]
+    m = re.search(r"minus (\d+) km Weg", " ".join(R["meldungen"]))
+    check(m and hu["abfahrt_km"] + int(m.group(1)) == 216000, "HU 2026 neu ausgerichtet: Tacho bei Werkstatt = 216.000")
     check({o["ort"]: o["km_einfach"] for o in d["orte"]}["Neumarkt"] < 40, "km einfach Neumarkt automatisch korrigiert")
     c, r = api("geo_one", {"ort": "Weitweg", "suche": "Weitweg bei Salzburg"}, T)
     check(r["ok"] and r["km"] < 60, f"eigener Suchbegriff im Orte-Check findet den richtigen Ort ({r['km']} km)")
@@ -242,6 +278,9 @@ try:
     check(any("Neumarkt" in v for v in d["verdacht"]), f"falsche Neumarkt-Strecke (291 km) erkannt: {d['verdacht']}")
     maxd = max(r["km_d"] for rows in d["monate"].values() for r in rows)
     check(maxd < 360, f"keine Fahrt mit hunderten Dienst-km (max. {maxd} km)")
+    c, A = api("abgleich", {"jahr": 2025}, T)
+    check(not A["auffaellig"] and any("Neumarkt" in x and "291" in x for x in A["ort_probleme"]),
+          f"Abgleich: normale Fahrten nicht gemeldet, aber falsche Strecke einmal genannt ({A['ort_probleme']})")
     br, ende, naechst, J = kette_ok(2025)
     check(br == 0, "Kette 2025 lückenlos")
     check(ende == naechst, "Jahresende 2025 = Startwert 2026")
@@ -280,6 +319,17 @@ try:
     check(any(any("Geschwindigkeit" in f for f in v) for v in d["flags"].values()), "Prüfung meldet 120 km in 30 Min")
     m = [r for r in J3["monate"]["3"] if r["route"] == "Manuell"][0]
     check(m["dauer"] == "00:30", "Dauer aus Abfahrt/Ankunft berechnet")
+    br26, _, _, J26 = kette_ok(2026)
+    check(br26 == 0 and {int(k): v for k, v in J26["anker"].items()} == kette_ok(2025)[1], "Folgejahr 2026 schließt nach Änderung 2025 lückenlos an")
+    rows = J3["monate"]["3"] + [{"datum": "2025-04-30", "fahrzeug": "VW Polo", "route": "Falscher Monat", "abf": "09:00", "ank": "10:00", "km_d": 20, "km_p": 0}]
+    api("monat_save", {"jahr": 2025, "monat": 3, "rows": rows}, T)
+    c, Jx = api("jahr_get", query={"jahr": 2025}, token=T)
+    check(any(r["route"] == "Falscher Monat" for r in Jx["monate"]["4"]) and not any(r["route"] == "Falscher Monat" for r in Jx["monate"]["3"]), "Fahrt mit April-Datum landet im April")
+    c, d = api("monat_save", {"jahr": 2025, "monat": 3, "rows": rows + [{"datum": "2024-03-01", "fahrzeug": "VW Polo", "route": "x", "km_d": 1}]}, T)
+    check(c == 400, "Fahrt aus anderem Jahr wird abgelehnt")
+    c, d = api("fz_get", token=T)
+    c, d = api("fz_save", {"fahrzeuge": d["fahrzeuge"][1:]}, T)
+    check(c == 400 and "nicht gelöscht" in d["error"], "Fahrzeug mit Fahrten kann nicht gelöscht werden")
 
     # ---------- Privat-KM ----------
     c, d = api("privat_verteilen", {"jahr": 2025, "fahrzeug_id": 70, "total": 6000, "anzahl_gross": 4, "gross_min": 300, "gross_max": 800, "normal_min": 5, "normal_max": 45}, T)
@@ -359,6 +409,15 @@ try:
     c, d = api("zr_save", {"zeitraeume": [{"fahrzeug_id": 69, "von": "2025-12-01", "bis": "2025-01-01"}]}, T)
     check(c == 400, "Zeitraum mit Ende vor Beginn abgelehnt")
 
+    # ---------- Sicherung ----------
+    c, B = api("sicherung", token=T)
+    check(c == 200 and len(B["fb_fahrten"]) > 700 and B["fb_fahrzeuge"][0]["id"] == 69, f"Sicherung enthält {len(B['fb_fahrten'])} Fahrten")
+    api("jahr_delete", {"jahr": 2025}, T)
+    c, d = api("sicherung_laden", B, T)
+    c2, J = api("jahr_get", query={"jahr": 2025}, token=T)
+    check(c == 200 and len(J["monate"]) == 12, "Sicherung wiederhergestellt: gelöschtes Jahr 2025 wieder da")
+    check(kette_ok(2025)[0] == 0, "Kette nach Wiederherstellung lückenlos")
+
     # ---------- Benutzer / Passwort ----------
     c, d = api("user_save", {"username": "Test Kollege", "email": "k@example.com", "password": "start123"}, T)
     check(c == 200, "Admin legt Zugang an")
@@ -373,6 +432,8 @@ try:
     check(c == 403, "Nicht-Admin kommt nicht in die Benutzerverwaltung")
     c, d = api("jahr_get", query={"jahr": 2025}, token=T2)
     check(c == 200 and len(d["monate"]) == 0 and len(d["fahrzeuge"]) == 0, "Benutzer sehen nur ihre eigenen Daten")
+    c, d = api("sicherung_laden", B, T2)
+    check(c == 400 and "anderen Benutzer" in d["error"], "fremde Sicherung kann nicht eingespielt werden")
     c, d = api("forgot", {"username": "christian mayerhofer"})
     check(c in (502, 503), "Passwort vergessen ohne funktionierende Mail: Fehlermeldung")
     c, d = api("login", {"username": "christian mayerhofer", "password": "geheim123"})

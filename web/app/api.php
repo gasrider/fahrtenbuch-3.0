@@ -97,6 +97,49 @@ function gen_settings(string $u, int $jahr): array {
   $d = $j ? json_decode((string) $j, true) : null;
   return is_array($d) ? $d : [];
 }
+// Jahr speichern: Kette ab Anker, Startwert Folgejahr setzen und - falls fuer die
+// Folgejahre schon Fahrten gespeichert sind - deren Kette ebenfalls nachziehen.
+function speichere_mit_kette(string $u, int $jahr, array $daten): array {
+  [$daten, $ende] = baue_kette_neu($daten, anker($u, $jahr));
+  speichere_jahr($u, $jahr, $daten);
+  setze_start_km($u, $jahr + 1, $ende);
+  $erstEnde = $ende;
+  for ($j = $jahr + 1; $j <= $jahr + 30; $j++) {
+    $folge = lade_jahr($u, $j);
+    if (!$folge) break;
+    [$folge, $ende] = baue_kette_neu($folge, $ende);
+    speichere_jahr($u, $j, $folge);
+    setze_start_km($u, $j + 1, $ende);
+  }
+  return [$daten, $erstEnde];
+}
+// Alle Orte, die irgendwo verwendet werden, mit ihrer Herkunft
+function orte_quellen(string $u, array $st): array {
+  $o = [];
+  $add = function ($ort, string $quelle) use (&$o) {
+    $ort = trim((string) $ort);
+    if ($ort === '' || mb_strlen($ort) > 100) return;
+    $k = norm_ort($ort);
+    if (!isset($o[$k])) $o[$k] = ['ort' => $ort, 'quellen' => []];
+    $o[$k]['quellen'][$quelle] = true;
+  };
+  $add(ort_clean((string) $st['wohnort']), 'Wohnort');
+  $add(ort_clean((string) $st['dienstort']), 'Dienstort');
+  foreach (q('SELECT ort FROM fb_orte WHERE username = ?', [$u])->fetchAll(PDO::FETCH_COLUMN) as $x) $add($x, 'Orte-Liste');
+  $texte = q('SELECT settings_json FROM fb_gen_settings WHERE username = ?', [$u])->fetchAll(PDO::FETCH_COLUMN);
+  $hatKw = false;
+  foreach ($texte as $j) { $d = json_decode((string) $j, true); if (!empty($d['keyword_text'])) { $hatKw = true; foreach (keywords_aus_text($d['keyword_text']) as $k) $add($k['Ort'], 'Keywords'); } }
+  if (!$hatKw) foreach (keywords_aus_text(DEFAULT_KEYWORDS) as $k) $add($k['Ort'], 'Keywords');
+  foreach (q('SELECT werkstattort, stopps_vor_hu, stopps_nach_hu FROM fb_hu WHERE username = ?', [$u])->fetchAll() as $h) {
+    $add($h['werkstattort'], 'HU');
+    foreach (explode(',', $h['stopps_vor_hu'] . ',' . $h['stopps_nach_hu']) as $x) $add($x, 'HU');
+  }
+  foreach (q('SELECT DISTINCT route FROM fb_fahrten WHERE username = ? AND km_d > 0', [$u])->fetchAll(PDO::FETCH_COLUMN) as $r)
+    foreach (route_orte((string) $r) as $x) $add($x, 'Fahrten');
+  foreach ($o as $k => $v) $o[$k]['quellen'] = array_keys($v['quellen']);
+  return $o;
+}
+
 function pruefung(array $daten): array {
   $f = [];
   foreach ($daten as $m => $rows) { $x = pruefe_monat($rows); if ($x) $f[$m] = $x; }
@@ -108,6 +151,9 @@ function rate_limit(string $key, int $max): void {
   if ((int) q('SELECT COUNT(*) FROM fb_attempts WHERE ip = ? AND ts > UTC_TIMESTAMP() - INTERVAL 15 MINUTE', [$key])->fetchColumn() >= $max)
     fail(429, 'Zu viele Versuche. Bitte in 15 Minuten nochmal probieren.');
 }
+
+// Tabellen mit Benutzerdaten (Sicherung)
+const SICHERUNG_TABELLEN = ['fb_stammdaten', 'fb_fahrzeuge', 'fb_zeitraeume', 'fb_fahrten', 'fb_hu', 'fb_orte', 'fb_koordinaten', 'fb_matrix', 'fb_start_km', 'fb_gen_settings'];
 
 switch ($action) {
 
@@ -198,6 +244,10 @@ case 'fz_save': {
     }
   }
   foreach (array_keys($alt) as $id) if (!isset($behalten[$id])) {
+    if ((int) q('SELECT COUNT(*) FROM fb_fahrten WHERE username = ? AND fahrzeug_id = ?', [$n, $id])->fetchColumn() > 0) {
+      db()->rollBack();
+      fail(400, 'Ein Fahrzeug mit gespeicherten Fahrten kann nicht gelöscht werden (sonst stimmt die Kilometerkette nicht mehr). Stattdessen im Nutzungszeitraum das „bis“-Datum setzen.');
+    }
     q('DELETE FROM fb_fahrzeuge WHERE id = ? AND username = ?', [$id, $n]);
     q('DELETE FROM fb_zeitraeume WHERE fahrzeug_id = ? AND username = ?', [$id, $n]);
   }
@@ -263,10 +313,14 @@ case 'geo_plan': {
     q('DELETE FROM fb_koordinaten WHERE username = ?', [$n]);
     q("DELETE FROM fb_matrix WHERE username = ? AND quelle <> 'manuell'", [$n]);
   }
+  foreach ((array) ($in['zusatz'] ?? []) as $z) if (trim((string) $z) !== '') q('INSERT IGNORE INTO fb_orte (username, ort, km_einfach) VALUES (?,?,0)', [$n, trim((string) $z)]);
   $alle = [];
-  foreach (array_merge([$home, ort_clean((string) $st['dienstort'])], array_column(q('SELECT ort FROM fb_orte WHERE username = ?', [$n])->fetchAll(), 'ort'),
-    array_map('trim', (array) ($in['zusatz'] ?? []))) as $o)
-    if (trim((string) $o) !== '' && !isset($alle[norm_ort($o)])) $alle[norm_ort($o)] = trim((string) $o);
+  foreach (orte_quellen($n, $st) as $k => $v) {
+    $alle[$k] = $v['ort'];
+    // Orte aus Keywords, HU und Fahrten in die Orte-Liste aufnehmen, damit "km einfach" gepflegt wird
+    if (!in_array('Orte-Liste', $v['quellen'], true) && !in_array('Wohnort', $v['quellen'], true))
+      q('INSERT IGNORE INTO fb_orte (username, ort, km_einfach) VALUES (?,?,0)', [$n, $v['ort']]);
+  }
   $bekannt = [];
   foreach (q('SELECT ort_key FROM fb_koordinaten WHERE username = ? AND lat IS NOT NULL', [$n])->fetchAll(PDO::FETCH_COLUMN) as $k) $bekannt[$k] = true;
   $offen = [];
@@ -328,12 +382,19 @@ case 'geo_liste': {
   foreach (q('SELECT ort_key, ort, lat, lon, display_name FROM fb_koordinaten WHERE username = ?', [$n])->fetchAll() as $r) $k[$r['ort_key']] = $r;
   $h = $k[norm_ort($home)] ?? null;
   $orte = [];
-  foreach (array_merge([$home, ort_clean((string) $st['dienstort'])], array_column(q('SELECT ort FROM fb_orte WHERE username = ? ORDER BY ort', [$n])->fetchAll(), 'ort')) as $o) {
-    if ($o === '' || isset($orte[norm_ort($o)])) continue;
-    $r = $k[norm_ort($o)] ?? null;
+  $kmE = [];
+  foreach (q('SELECT ort, km_einfach FROM fb_orte WHERE username = ?', [$n])->fetchAll() as $r) $kmE[norm_ort($r['ort'])] = (int) $r['km_einfach'];
+  foreach (orte_quellen($n, $st) as $key => $v) {
+    $r = $k[$key] ?? null;
     $d = ($r && $r['lat'] !== null && $h && $h['lat'] !== null) ? round(luftlinie_km((float) $h['lat'], (float) $h['lon'], (float) $r['lat'], (float) $r['lon'])) : null;
-    $orte[norm_ort($o)] = ['ort' => $o, 'gefunden' => $r ? (string) $r['display_name'] : null, 'luftlinie' => $d];
+    $orte[$key] = ['ort' => $v['ort'], 'quellen' => $v['quellen'], 'gefunden' => $r ? (string) $r['display_name'] : null, 'luftlinie' => $d, 'km_einfach' => $kmE[$key] ?? null];
   }
+  // Problemfaelle zuerst
+  uasort($orte, function ($a, $b) {
+    // 0 = sicher falsch (zu weit / km zu hoch), 1 = nicht gefunden oder noch nicht gesucht, 2 = in Ordnung
+    $p = function ($o) { return (($o['luftlinie'] ?? 0) > 60 || ($o['km_einfach'] ?? 0) > PLAUSI_LEG_KM) ? 0 : (($o['gefunden'] === null || $o['gefunden'] === '') ? 1 : 2); };
+    return $p($a) <=> $p($b) ?: strcmp($a['ort'], $b['ort']);
+  });
   $lang = [];
   foreach (q('SELECT ort_a, ort_b, km FROM fb_matrix WHERE username = ? AND km > ? ORDER BY km DESC', [$n, PLAUSI_LEG_KM])->fetchAll() as $r) $lang[] = "{$r['ort_a']} – {$r['ort_b']}: {$r['km']} km";
   out(['orte' => array_values($orte), 'grenze' => PLAUSI_LEG_KM, 'lange_strecken' => $lang]);
@@ -351,16 +412,31 @@ case 'geo_route': {
   $vorh = matrix($n);
   $alt = [];
   foreach (q('SELECT key_a, key_b, quelle FROM fb_matrix WHERE username = ?', [$n])->fetchAll() as $r) $alt["{$r['key_a']}|{$r['key_b']}"] = $r['quelle'];
-  $coords = implode(';', array_map(function ($p) { return sprintf('%.6F,%.6F', $p['lon'], $p['lat']); }, $pkt));
+  // OSRM-Table in Bloecken zu je 45 Orten (der Dienst nimmt max. 100 Orte pro Anfrage)
   $osrm = rtrim((string) cfg('osrm_url', 'https://router.project-osrm.org'), '/');
-  [$code, $res, $err] = http_get_json("$osrm/table/v1/driving/$coords?annotations=distance", ['User-Agent: Fahrtenbuch-App/3.0'], 60);
-  $dm = ($code === 200 && ($res['code'] ?? '') === 'Ok') ? $res['distances'] : null;
-  $neu = 0; $geschaetzt = 0; $cnt = count($pkt);
+  $cnt = count($pkt); $B = max(2, (int) cfg('osrm_block', 45)); $dm = []; $osrmOk = false;
+  for ($bi = 0; $bi < $cnt; $bi += $B) for ($bj = $bi; $bj < $cnt; $bj += $B) {
+    $ii = range($bi, min($bi + $B, $cnt) - 1); $jj = range($bj, min($bj + $B, $cnt) - 1);
+    $idx = array_values(array_unique(array_merge($ii, $jj)));
+    $pos = array_flip($idx);
+    $coords = implode(';', array_map(function ($i) use ($pkt) { return sprintf('%.6F,%.6F', $pkt[$i]['lon'], $pkt[$i]['lat']); }, $idx));
+    $src = implode(';', array_map(function ($i) use ($pos) { return $pos[$i]; }, $ii));
+    $dst = implode(';', array_map(function ($i) use ($pos) { return $pos[$i]; }, $jj));
+    if ($bi > 0 || $bj > 0) usleep(300000);
+    [$code, $res] = http_get_json("$osrm/table/v1/driving/$coords?annotations=distance&sources=$src&destinations=$dst", ['User-Agent: Fahrtenbuch-App/3.0'], 60);
+    if ($code !== 200 || ($res['code'] ?? '') !== 'Ok') continue;
+    $osrmOk = true;
+    foreach ($ii as $a => $i) foreach ($jj as $b => $j) {
+      $v = $res['distances'][$a][$b] ?? null;
+      if ($v) { $dm[$i][$j] = max($dm[$i][$j] ?? 0, $v); $dm[$j][$i] = max($dm[$j][$i] ?? 0, $v); }
+    }
+  }
+  $neu = 0; $geschaetzt = 0;
   for ($i = 0; $i < $cnt; $i++) for ($j = $i + 1; $j < $cnt; $j++) {
     $a = $pkt[$i]; $b = $pkt[$j]; $k = mkey($a['ort_key'], $b['ort_key']);
     if ($nurFehlende && isset($vorh[$k])) continue;
     if (($alt[$k] ?? '') === 'manuell') continue; // manuelle Korrekturen nie ueberschreiben
-    $d = $dm ? max($dm[$i][$j] ?? 0, $dm[$j][$i] ?? 0) : 0;
+    $d = $dm[$i][$j] ?? 0;
     if ($d > 0) $km = (int) round($d / 1000);
     else {
       $p1 = deg2rad((float) $a['lat']); $p2 = deg2rad((float) $b['lat']); $dl = deg2rad((float) $b['lon'] - (float) $a['lon']);
@@ -382,7 +458,7 @@ case 'geo_route': {
       $akt[] = "{$r['ort']}: {$r['km_einfach']} → {$m[$k]} km";
     }
   }
-  out(['ok' => true, 'neu' => $neu, 'geschaetzt' => $geschaetzt, 'osrm' => (bool) $dm, 'aktualisiert' => $akt]);
+  out(['ok' => true, 'neu' => $neu, 'geschaetzt' => $geschaetzt, 'osrm' => $osrmOk, 'aktualisiert' => $akt]);
 }
 
 /* ---------- Excel-/CSV-Import (nur Vorschau, gespeichert wird ueber die normalen Knoepfe) ---------- */
@@ -428,9 +504,7 @@ case 'generieren': {
   $daten = $modus === 'Ganzes Jahr' ? [] : lade_jahr($n, $jahr);
   foreach ($neu as $m => $rows) $daten[$m] = $rows;
   $anker = anker($n, $jahr);
-  [$daten, $ende] = baue_kette_neu($daten, $anker);
-  speichere_jahr($n, $jahr, $daten);
-  setze_start_km($n, $jahr + 1, $ende);
+  [$daten, $ende] = speichere_mit_kette($n, $jahr, $daten);
   out(['ok' => true, 'monate' => (object) $daten, 'jahre' => jahre($n), 'flags' => (object) pruefung($daten), 'fehlende' => $fehlende, 'verdacht' => $verdacht,
     'ende' => (object) $ende, 'anker' => (object) $anker, 'generiert' => $monate]);
 }
@@ -453,11 +527,12 @@ case 'monat_save': {
       'route' => (string) ($r['route'] ?? ''), 'km_d' => max(0, to_int($r['km_d'] ?? 0)), 'km_p' => max(0, to_int($r['km_p'] ?? 0)),
       'abf' => $abf, 'ank' => $ank, 'dauer' => ($abf === '00:00' && $ank === '00:00') ? '00:00' : dauer_string($abf, $ank), 'abfahrt_km' => 0];
   }
+  foreach ($rows as $r) if ((int) substr($r['datum'], 0, 4) !== $jahr) fail(400, 'Die Fahrt vom ' . date('d.m.Y', strtotime($r['datum'])) . " gehört nicht ins Jahr $jahr – bitte das Datum prüfen.");
   $daten = lade_jahr($n, $jahr);
-  $daten[$monat] = $rows;
-  [$daten, $ende] = baue_kette_neu($daten, anker($n, $jahr));
-  speichere_jahr($n, $jahr, $daten);
-  setze_start_km($n, $jahr + 1, $ende);
+  $daten[$monat] = [];
+  // Jede Fahrt kommt in den Monat ihres Datums (auch wenn sie im Editor eines anderen Monats steht)
+  foreach ($rows as $r) $daten[(int) substr($r['datum'], 5, 2)][] = $r;
+  [$daten] = speichere_mit_kette($n, $jahr, $daten);
   out(['ok' => true, 'monate' => (object) $daten, 'jahre' => jahre($n), 'flags' => (object) pruefung($daten)]);
 }
 case 'anker_reset': { $u = require_user(); q('DELETE FROM fb_start_km WHERE username = ? AND jahr = ?', [$u['username'], jahr_param()]); out(['ok' => true]); }
@@ -473,8 +548,7 @@ case 'privat_verteilen': {
   $o = ['anzahl_gross' => max(0, min(12, to_int($in['anzahl_gross'] ?? 4))), 'gross_min' => $gmin, 'gross_max' => max($gmin, to_int($in['gross_max'] ?? 800)),
     'normal_min' => max(0, to_int($in['normal_min'] ?? 5)), 'normal_max' => max(1, to_int($in['normal_max'] ?? 45))];
   [$daten, $ende, $msg] = verteile_privat_km(lade_jahr($n, $jahr), $fid, $fz[$fid], to_int($in['total'] ?? 0), $o, anker($n, $jahr));
-  speichere_jahr($n, $jahr, $daten);
-  setze_start_km($n, $jahr + 1, $ende);
+  speichere_mit_kette($n, $jahr, $daten);
   out(['ok' => true, 'meldungen' => $msg]);
 }
 
@@ -519,10 +593,87 @@ case 'hu_anwenden': {
     $daten = lade_jahr($n, $jahr);
     if (!$daten) { $msg[] = "$jahr: keine gespeicherten Fahrten – zuerst generieren."; continue; }
     [$daten, $ende, $m] = wende_hu_an($daten, anker($n, $jahr), $namen, $korr, (string) $st['wohnort'], distanzen($n), matrix($n));
-    speichere_jahr($n, $jahr, $daten);
-    setze_start_km($n, $jahr + 1, $ende);
+    speichere_mit_kette($n, $jahr, $daten);
     $msg = array_merge($msg, $m);
   }
+  out(['ok' => true, 'meldungen' => $msg]);
+}
+
+/* ================= Sicherung ================= */
+// Alle eigenen Daten als JSON (fuer Notfaelle vor Generieren/Korrigieren)
+case 'sicherung': {
+  $u = require_user(); $n = $u['username'];
+  $d = ['app' => 'Fahrtenbuch', 'version' => 1, 'username' => $n, 'erstellt' => gmdate('c')];
+  foreach (SICHERUNG_TABELLEN as $t) $d[$t] = q("SELECT * FROM $t WHERE username = ?", [$n])->fetchAll();
+  out($d);
+}
+case 'sicherung_laden': {
+  $u = require_user(); $n = $u['username'];
+  if (($in['app'] ?? '') !== 'Fahrtenbuch' || !isset($in['fb_fahrten'])) fail(400, 'Das ist keine Fahrtenbuch-Sicherung.');
+  // Fahrzeug-IDs muessen frei oder schon die eigenen sein
+  foreach ((array) $in['fb_fahrzeuge'] as $f) {
+    $own = q('SELECT username FROM fb_fahrzeuge WHERE id = ?', [(int) ($f['id'] ?? 0)])->fetchColumn();
+    if ($own !== false && $own !== $n) fail(400, 'Die Sicherung gehört zu einem anderen Benutzer.');
+  }
+  db()->beginTransaction();
+  try {
+    $anz = 0;
+    foreach (SICHERUNG_TABELLEN as $t) {
+      q("DELETE FROM $t WHERE username = ?", [$n]);
+      $spalten = array_column(db()->query("SHOW COLUMNS FROM $t")->fetchAll(), 'Field');
+      foreach ((array) ($in[$t] ?? []) as $r) {
+        $r = array_intersect_key((array) $r, array_flip($spalten));
+        $r['username'] = $n;
+        if ($t === 'fb_fahrten') unset($r['id']);
+        $k = array_keys($r);
+        q("INSERT INTO $t (" . implode(',', $k) . ') VALUES (' . implode(',', array_fill(0, count($k), '?')) . ')', array_values($r));
+        $anz++;
+      }
+    }
+    db()->commit();
+  } catch (Throwable $e) { db()->rollBack(); throw $e; }
+  out(['ok' => true, 'anzahl' => $anz]);
+}
+
+/* ================= Gesamt-Abgleich ================= */
+case 'abgleich': {
+  // Prueft alle Dienstfahrten eines Jahres: passen die km zu den Orten der Route?
+  // Mit korrigieren=true werden auffaellige Fahrten auf den erwarteten Wert gesetzt,
+  // die Kette neu aufgebaut und gespeicherte HUs des Jahres neu ausgerichtet.
+  $u = require_user(); $n = $u['username']; $jahr = jahr_param(); $st = stammdaten($n);
+  $daten = lade_jahr($n, $jahr);
+  if (!$daten) fail(404, "Für $jahr sind keine Fahrten gespeichert.");
+  $home = ort_clean((string) $st['wohnort']);
+  [$auff, $unbek, $anz, $streckenProbleme] = fahrten_abgleich($daten, matrix($n), distanzen($n), $home);
+  $orte = orte_quellen($n, $st);
+  $kmE = []; foreach (q('SELECT ort, km_einfach FROM fb_orte WHERE username = ?', [$n])->fetchAll() as $r) $kmE[norm_ort($r['ort'])] = (int) $r['km_einfach'];
+  $ortProbleme = [];
+  foreach ($orte as $k => $o) if (($kmE[$k] ?? 0) > PLAUSI_LEG_KM) $ortProbleme[] = "{$o['ort']}: {$kmE[$k]} km einfach vom Wohnort";
+  foreach ($streckenProbleme as $sp) $ortProbleme[] = "Strecke $sp";
+  if (empty($in['korrigieren'])) {
+    $monate = array_values(array_unique(array_column($auff, 'monat'))); sort($monate);
+    out(['jahr' => $jahr, 'gepruefte' => $anz, 'auffaellig' => array_map(function ($a) { unset($a['i']); return $a; }, $auff),
+      'monate' => $monate, 'unbekannte_orte' => $unbek, 'ort_probleme' => $ortProbleme]);
+  }
+  [$daten, $k] = fahrten_korrigieren($daten, $auff);
+  $msg = ["$k auffällige Fahrt(en) korrigiert."];
+  $ohne = count(array_filter($auff, function ($a) { return !$a['erwartet']; }));
+  if ($ohne) $msg[] = "$ohne Fahrt(en) ohne bekannte Strecke nicht korrigiert – zuerst die Orte im Orte-Check suchen lassen.";
+  // HUs dieses Jahres neu ausrichten (Tacho bei Ankunft Werkstatt = HU-Stand)
+  $korr = [];
+  foreach (q('SELECT * FROM fb_hu WHERE username = ? AND YEAR(datum) = ? ORDER BY datum', [$n, $jahr])->fetchAll() as $r) {
+    $split = function ($s) { return array_values(array_filter(array_map('trim', explode(',', (string) $s)), 'strlen')); };
+    $korr[] = ['fahrzeug_id' => (int) $r['fahrzeug_id'], 'datum' => $r['datum'], 'km_at_hu' => (int) $r['km_at_hu'], 'werkstattort' => $r['werkstattort'],
+      'stopps_vor' => $split($r['stopps_vor_hu']), 'stopps_nach' => $split($r['stopps_nach_hu'])];
+  }
+  if ($korr) {
+    [$daten, , $m] = wende_hu_an($daten, anker($n, $jahr), array_column(fahrzeuge($n), 'bezeichnung', 'id'), $korr, (string) $st['wohnort'], distanzen($n), matrix($n), true);
+    $msg[] = 'HU neu ausgerichtet:';
+    $msg = array_merge($msg, $m);
+  }
+  [$daten] = speichere_mit_kette($n, $jahr, $daten);
+  [$rest] = fahrten_abgleich($daten, matrix($n), distanzen($n), $home);
+  $msg[] = count($rest) ? count($rest) . ' Fahrt(en) weiterhin auffällig – siehe Liste.' : 'Danach keine auffälligen Fahrten mehr.';
   out(['ok' => true, 'meldungen' => $msg]);
 }
 

@@ -48,6 +48,16 @@ for (const [name, opts] of [['desktop', { viewport: { width: 1400, height: 950 }
     ok(true, 'Monat bearbeitet und gespeichert');
     const [dl] = await Promise.all([p.waitForEvent('download'), p.getByRole('button', { name: /Monats-PDF Mai/ }).click()]);
     ok(/Fahrtenbuch_2025_05\.pdf/.test(dl.suggestedFilename()), 'Monats-PDF heruntergeladen: ' + dl.suggestedFilename());
+    // Gesamt-Abgleich im Pruefung-Tab
+    await p.locator('nav').getByRole('button', { name: 'Prüfung', exact: true }).click();
+    await p.getByRole('button', { name: /Gesamt-Abgleich \d+ starten/ }).click();
+    await p.getByText(/Dienstfahrten \d+ geprüft/).waitFor({ timeout: 20000 });
+    ok(true, 'Gesamt-Abgleich läuft');
+    await p.screenshot({ path: `${SHOTS}/desktop-abgleich.png`, fullPage: false });
+    // Orte-Check zeigt Herkunft
+    await p.locator('nav').getByRole('button', { name: 'Fahrzeuge & Orte', exact: true }).click();
+    await p.getByText('Orte-Check', { exact: true }).waitFor();
+    ok(await p.getByText('Verwendet in').count() > 0, 'Orte-Check mit Spalte „Verwendet in“');
     // Stammdaten speichern
     await p.locator('nav').getByRole('button', { name: 'Stammdaten', exact: true }).click();
     await p.getByRole('button', { name: 'Stammdaten speichern' }).click();
