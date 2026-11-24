@@ -40,6 +40,8 @@ for (const [name, opts] of [['desktop', { viewport: { width: 1400, height: 950 }
     await p.getByRole('button', { name: /Fahrten für Mai 2025 generieren/ }).click();
     await p.getByText(/Fahrten für 1 Monat\(e\) generiert/).waitFor({ timeout: 30000 });
     ok(true, 'Generator: Mai 2025 generiert');
+    ok(!/(^|\n)\s*null\s*(\n|$)/.test(await p.locator('main').innerText()), 'kein „null“ in der Anzeige');
+    ok(await p.getByRole('button', { name: 'Ort korrigieren' }).count() > 0, 'fehlende Orte mit Knopf „Ort korrigieren“');
     await p.screenshot({ path: `${SHOTS}/desktop-generiert.png`, fullPage: true });
     const kmFeld = p.locator('table tbody tr').first().locator('td.num input').first();
     await kmFeld.fill('77');

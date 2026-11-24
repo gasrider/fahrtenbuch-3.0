@@ -93,6 +93,11 @@ tr.lang td{background:var(--hibg)}
 <script>
 'use strict';
 /* ================= Helfer ================= */
+// append/replaceChildren: Arrays aufloesen, null/false/undefined ueberspringen (sonst erscheint "null" als Text)
+for (const fn of ['append', 'replaceChildren']) {
+  const orig = Element.prototype[fn];
+  Element.prototype[fn] = function (...k) { return orig.apply(this, k.flat(Infinity).filter(x => x !== null && x !== undefined && x !== false)); };
+}
 const $root = document.getElementById('root');
 const MONATE = ['Jänner','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
 const WT = ['So','Mo','Di','Mi','Do','Fr','Sa'];
@@ -322,6 +327,14 @@ function monatsEditor(J, monat, onSaved) {
       h('div', { class: 'stat' }, h('b', {}, fmt(sum[1])), h('span', {}, 'Privat-KM')), h('div', { class: 'stat' }, h('b', {}, rows.length), h('span', {}, 'Einträge'))),
     g.el, h('div', { class: 'row' }, saveBtn, h('p', { class: 'hint' }, 'Beim Speichern werden ALLE Kilometerstände des Jahres ab dem Jahres-Startwert neu berechnet und geprüft. Dauer ergibt sich aus Abfahrt/Ankunft.')));
 }
+// Ort an allen Stellen umbenennen (Keywords aller Jahre, Orte, HU, gespeicherte Fahrten)
+async function ortUmbenennen(alt, neu) {
+  neu = (neu || '').trim();
+  if (!neu || neu === alt) { toast('Bitte den richtigen Ortsnamen eintragen.'); return false; }
+  const d = await api('ort_umbenennen', { alt, neu });
+  toast(d.message + ' Danach im Tab „Fahrzeuge & Orte“ „Distanzen online berechnen“.');
+  return true;
+}
 function flagsBox(flags, nurMonat) {
   const keys = Object.keys(flags || {}).map(Number).filter(m => !nurMonat || m === nurMonat).sort((a, b) => a - b);
   if (!keys.length) return msg('ok', 'Plausibilitätsprüfung: keine Auffälligkeiten.');
@@ -368,7 +381,13 @@ async function viewGen(main) {
     const ende = J.fahrzeuge.filter(f => d.ende[f.id] !== undefined).map(f => `• ${f.bezeichnung}: ${fmt(d.ende[f.id])} km`).join('\n');
     ergebnis.replaceChildren(msg('ok', `Fahrten für ${d.generiert.length} Monat(e) generiert und gespeichert. Startwerte für ${S.jahr + 1} vorbelegt.\n\nEndkilometerstand pro Fahrzeug (31.12.):\n${ende}`),
       d.verdacht && d.verdacht.length ? msg('err', 'Unplausible Distanzen ignoriert (falscher Ort auf der Karte?):\n' + d.verdacht.map(v => '• ' + v).join('\n') + '\nBitte im Tab „Fahrzeuge & Orte“ → Orte-Check korrigieren und neu generieren.') : null,
-      d.fehlende.length ? msg('warn', 'Keine Distanz gepflegt für: ' + d.fehlende.join(', ') + ' – dafür wurden Zufalls-KM verwendet. Im Tab „Fahrzeuge & Orte“ die Distanzen online berechnen und neu generieren.') : null);
+      d.fehlende.length ? h('div', { class: 'msg warn', style: 'display:grid;gap:8px' },
+        h('div', {}, `Keine Distanz bekannt für ${d.fehlende.length} Ort(e) – dafür wurden Zufalls-KM verwendet. Entweder ist der Name falsch geschrieben (dann hier korrigieren) oder die Distanzen wurden noch nicht berechnet (Tab „Fahrzeuge & Orte“ → „Distanzen online berechnen“).`),
+        d.fehlende.map(f => {
+          const inp = h('input', { value: f.ort, 'aria-label': 'Richtiger Name für ' + f.ort, style: 'max-width:280px' });
+          const b = h('button', { class: 'btn sm', onclick: () => busy(b, async () => { if (await ortUmbenennen(f.ort, inp.value)) { b.textContent = 'Korrigiert ✓'; b.disabled = true; F.keyword_text.value = F.keyword_text.value.split('\n').map(l => { const p = l.split(':'); return p.length === 2 && p[0].trim().toLowerCase() === f.ort.toLowerCase() ? inp.value.trim() + ':' + p[1] : l; }).join('\n'); } }) }, 'Ort korrigieren');
+          return h('div', { class: 'row', style: 'align-items:center' }, h('b', {}, f.ort), h('span', { class: 'hint' }, '(aus: ' + (f.quellen.join(', ') || '?') + ')'), inp, b);
+        })) : null);
     zeigeMonate(d.generiert[d.generiert.length - 1]);
   }) }, '');
   const monatBox = h('div', { style: 'display:grid;gap:10px' });
@@ -433,6 +452,7 @@ async function viewFz(main) {
       const o = plan.zu_suchen[i];
       status.textContent = `Ort ${i + 1}/${plan.zu_suchen.length} auf der Karte suchen: ${o}`; bar.style.width = (i / Math.max(1, plan.zu_suchen.length) * 80) + '%';
       const r = await api('geo_one', { ort: o });
+      if (r.dienst_fehler && i === 0) { probleme.push(`${o}: ${r.hinweis}`); break; }
       if (!r.ok) probleme.push(`${o}: ` + (r.hinweis || 'nicht gefunden – Schreibweise prüfen.')); else if (r.hinweis) probleme.push(`${o}: ${r.hinweis}`);
       await new Promise(r => setTimeout(r, 1100)); // OpenStreetMap: max. 1 Anfrage pro Sekunde
     }
@@ -441,7 +461,7 @@ async function viewFz(main) {
     bar.style.width = '100%'; status.textContent = 'Fertig.';
     geoOut.replaceChildren(msg('ok', `${r.neu} Strecken berechnet` + (r.osrm ? ' (echte Fahrstrecken).' : '.') + (r.aktualisiert.length ? '\n„km einfach“ aktualisiert: ' + r.aktualisiert.join(', ') : '') + '\n\nWichtig: Unten im Orte-Check kontrollieren, dann das Jahr im Generator neu generieren.'),
       r.geschaetzt ? msg('warn', `${r.geschaetzt} Strecke(n) konnten nicht geroutet werden und wurden aus der Luftlinie geschätzt (× 1,25).`) : null,
-      probleme.length ? msg('warn', 'Bitte prüfen:\n' + probleme.map(p => '• ' + p).join('\n')) : null,
+      probleme.length ? msg('warn', 'Bitte im Orte-Check unten prüfen:\n' + probleme.map(p => '• ' + p).join('\n')) : null,
       h('button', { class: 'btn sm', onclick: () => render() }, 'Tabellen neu laden'));
   };
   const geoBtn = h('button', { class: 'btn pri', onclick: () => busy(geoBtn, () => geoLauf({ nur_fehlende: nurFehl.checked })) }, 'Distanzen online berechnen');
@@ -451,10 +471,18 @@ async function viewFz(main) {
   const checkBox = h('div', { style: 'display:grid;gap:8px' },
     C.lange_strecken.length ? msg('err', `Unplausible Strecken (über ${C.grenze} km) – werden vom Generator ignoriert:\n` + C.lange_strecken.slice(0, 12).map(x => '• ' + x).join('\n') + (C.lange_strecken.length > 12 ? '\n…' : '')) : null,
     h('p', { class: 'hint' }, `${C.orte.length} Orte aus allen Quellen (Orte-Liste, Keywords aller Jahre, HU, gespeicherte Fahrten). Problemfälle stehen oben.`),
-    h('div', { class: 'tbl', style: 'max-height:60vh' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Ort'), h('th', {}, 'Verwendet in'), h('th', {}, 'Gefunden als'), h('th', {}, 'Luftlinie'), h('th', {}, 'km einfach'), h('th', {}, 'Genauer suchen als'), h('th', {}, ''))),
+    h('div', { class: 'tbl', style: 'max-height:60vh' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Ort'), h('th', {}, 'Verwendet in'), h('th', {}, 'Gefunden als'), h('th', {}, 'Luftlinie'), h('th', {}, 'km einfach'), h('th', {}, 'Richtiger Name / Suchbegriff'), h('th', {}, ''))),
       h('tbody', {}, C.orte.map(o => {
         const weit = o.luftlinie !== null && o.luftlinie > 60;
-        const such = h('input', { placeholder: 'genauerer Name oder PLZ + Ort', 'aria-label': 'Suchbegriff ' + o.ort });
+        const vorschlag = (o.hinweis.match(/Gefunden als „([^“]+)“/) || [])[1] || '';
+        const such = h('input', { placeholder: 'richtiger Name / genauer Suchbegriff', value: vorschlag, 'aria-label': 'Suchbegriff ' + o.ort });
+        const umb = h('button', { class: 'btn sm', title: 'Ortsname überall ersetzen (Keywords, Orte, HU, Fahrten)', onclick: () => busy(umb, async () => {
+          if (!(await ortUmbenennen(o.ort, such.value))) return;
+          const plan = await api('geo_plan', {});
+          const r = await api('geo_one', { ort: such.value.trim() });
+          if (r.ok) await api('geo_route', { orte: plan.orte, nur_fehlende: true });
+          render();
+        }) }, 'Umbenennen');
         const b = h('button', { class: 'btn sm', onclick: () => busy(b, async () => {
           const plan = await api('geo_plan', {});
           const r = await api('geo_one', { ort: o.ort, suche: such.value.trim() });
@@ -464,10 +492,11 @@ async function viewFz(main) {
         }) }, 'Neu suchen');
         const kmWeit = o.km_einfach !== null && o.km_einfach > C.grenze;
         return h('tr', {}, h('td', { class: 'ro' }, o.ort), h('td', { class: 'ro', style: 'white-space:normal' }, o.quellen.join(', ')),
-          h('td', { class: 'ro', style: 'white-space:normal;max-width:420px;' + (o.gefunden === null || o.gefunden === '' ? 'color:var(--hi)' : '') }, o.gefunden === null ? 'noch nicht gesucht' : (o.gefunden || 'nicht gefunden')),
+          h('td', { class: 'ro', style: 'white-space:normal;max-width:420px;' + (o.gefunden === null || o.gefunden === '' ? 'color:var(--hi)' : '') }, o.gefunden === null ? 'noch nicht gesucht' : (o.gefunden || 'nicht gefunden'),
+            o.hinweis ? h('div', { style: 'color:var(--warn);font-size:.78rem' }, o.hinweis) : null),
           h('td', { class: 'ro', style: weit ? 'color:var(--hi);font-weight:700' : '' }, o.luftlinie === null ? '–' : o.luftlinie + ' km' + (weit ? ' ⚠' : '')),
           h('td', { class: 'ro', style: kmWeit ? 'color:var(--hi);font-weight:700' : '' }, o.km_einfach === null ? '–' : o.km_einfach + ' km' + (kmWeit ? ' ⚠' : '')),
-          h('td', {}, such), h('td', { class: 'ro' }, b));
+          h('td', {}, such), h('td', { class: 'ro' }, b, ' ', umb));
       })))));
 
   main.replaceChildren(

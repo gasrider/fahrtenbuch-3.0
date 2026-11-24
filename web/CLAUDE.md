@@ -32,6 +32,9 @@ tests/ui.mjs             ← Playwright gegen laufende Instanz (KEEP=1 python3 t
 - Gesamt-Abgleich (`fahrten_abgleich()`): erwartete km = Strecke laut Matrix × Median-Faktor des Monats; auffällig > 2,2× oder > 360 km. Korrektur setzt km, baut Kette neu und richtet HUs des Jahres neu aus (`wende_hu_an(..., true)`).
 - Speichern immer über `speichere_mit_kette()`: zieht die Kette auch in Folgejahren mit Daten nach.
 - Fahrzeuge mit Fahrten nicht löschbar; Fahrten im Monats-Editor landen im Monat ihres Datums.
+- Ortssuche nutzt Nominatim (Umkreis) + Photon (Nähe-Bias, verzeiht Tippfehler) + Nominatim ohne Umkreis; nächster Treffer ≤ 100 km. Anderer Name gefunden → `vorschlag`. Dienst-Ausfall wird als solcher gemeldet. Hinweis der letzten Suche in fb_koordinaten.hinweis.
+- `ort_umbenennen`: korrigiert einen Ortsnamen überall (Keywords aller Jahre, fb_orte, fb_hu, Routen in fb_fahrten), verwirft alte Koordinaten/Strecken.
+- Element.prototype.append/replaceChildren sind gepatcht (null/false werden übersprungen) – sonst erscheint „null“ als Text.
 - Sicherung/Wiederherstellung (JSON, nur eigene Daten) im Tab Stammdaten.
 - Schema-Änderungen idempotent in `create_schema()` (läuft auch beim Update).
 

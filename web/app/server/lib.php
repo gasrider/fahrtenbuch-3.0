@@ -89,6 +89,8 @@ function create_schema(): void {
   $db->exec("CREATE TABLE IF NOT EXISTS fb_koordinaten (
     username VARCHAR(120) NOT NULL, ort_key VARCHAR(190) NOT NULL, ort VARCHAR(190) NOT NULL DEFAULT '',
     lat DOUBLE NULL, lon DOUBLE NULL, display_name TEXT NULL, PRIMARY KEY (username, ort_key)) $o");
+  // Migration: Hinweis der letzten Ortssuche (z. B. "zu weit weg", Tippfehler-Vorschlag)
+  if (!$db->query("SHOW COLUMNS FROM fb_koordinaten LIKE 'hinweis'")->fetch()) $db->exec("ALTER TABLE fb_koordinaten ADD COLUMN hinweis TEXT NULL");
   $db->exec("CREATE TABLE IF NOT EXISTS fb_matrix (
     username VARCHAR(120) NOT NULL, key_a VARCHAR(190) NOT NULL, key_b VARCHAR(190) NOT NULL,
     ort_a VARCHAR(190) NOT NULL DEFAULT '', ort_b VARCHAR(190) NOT NULL DEFAULT '',

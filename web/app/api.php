@@ -328,58 +328,144 @@ case 'geo_plan': {
   out(['orte' => array_values($alle), 'zu_suchen' => $offen]);
 }
 case 'geo_one': {
-  // Ort auf der Karte suchen. Gesucht wird zuerst nur in der Region um den Wohnort; von
-  // mehreren Treffern gewinnt der naechstgelegene. Treffer weiter als 100 km werden
-  // abgelehnt (sonst landet z. B. "Neumarkt" in der Steiermark statt am Wallersee).
+  // Ort auf der Karte suchen. Quellen: OpenStreetMap-Suche (Nominatim) im Umkreis des Wohnorts,
+  // dann Photon (bevorzugt Treffer in der Naehe, verzeiht Tippfehler), dann Nominatim ohne Umkreis.
+  // Von allen Treffern gewinnt der naechstgelegene; ueber 100 km wird abgelehnt.
   $u = require_user(); $n = $u['username']; $st = stammdaten($n);
   $ort = trim((string) ($in['ort'] ?? ''));
   $suche = trim((string) ($in['suche'] ?? '')) ?: $ort;
   if ($ort === '') fail(400, 'Ort fehlt.');
   $home = ort_clean((string) $st['wohnort']);
   $istHome = norm_ort($ort) === norm_ort($home);
-  $base = rtrim((string) cfg('nominatim_url', 'https://nominatim.openstreetmap.org'), '/');
-  $frage = function (array $p) use ($base) {
-    [$code, $res] = http_get_json("$base/search?" . http_build_query($p + ['format' => 'json', 'accept-language' => 'de']),
-      ['User-Agent: Fahrtenbuch-App/3.0 (OpenStreetMap-Distanzen)'], 20);
-    return ($code === 200 && is_array($res)) ? array_values(array_filter($res, function ($r) { return isset($r['lat'], $r['lon']); })) : [];
+  $nomi = rtrim((string) cfg('nominatim_url', 'https://nominatim.openstreetmap.org'), '/');
+  $photon = rtrim((string) cfg('photon_url', 'https://photon.komoot.io'), '/');
+  $ua = ['User-Agent: Fahrtenbuch-App/3.0 (OpenStreetMap-Distanzen)'];
+  $dienstFehler = [];
+  // Einheitliche Kandidaten: [lat, lon, name, anzeige]
+  $nominatim = function (array $p) use ($nomi, $ua, &$dienstFehler) {
+    [$code, $res, $err] = http_get_json("$nomi/search?" . http_build_query($p + ['format' => 'json', 'accept-language' => 'de']), $ua, 20);
+    if ($code !== 200) { $dienstFehler['OpenStreetMap'] = $code ? "Fehler $code" : ($err ?: 'keine Antwort'); return []; }
+    $o = [];
+    foreach ((array) $res as $r) if (isset($r['lat'], $r['lon'])) $o[] = [(float) $r['lat'], (float) $r['lon'], (string) ($r['name'] ?? strtok((string) $r['display_name'], ',')), (string) $r['display_name']];
+    return $o;
+  };
+  $photonFrage = function (string $q, ?float $lat, ?float $lon) use ($photon, $ua, &$dienstFehler) {
+    $p = ['q' => $q, 'limit' => 10, 'lang' => 'de'];
+    if ($lat !== null) { $p['lat'] = $lat; $p['lon'] = $lon; }
+    [$code, $res, $err] = http_get_json("$photon/api/?" . http_build_query($p), $ua, 20);
+    if ($code !== 200) { $dienstFehler['Photon'] = $code ? "Fehler $code" : ($err ?: 'keine Antwort'); return []; }
+    $o = [];
+    foreach ((array) ($res['features'] ?? []) as $f) {
+      $pr = $f['properties'] ?? []; $c = $f['geometry']['coordinates'] ?? null;
+      if (!$c || !in_array(strtoupper((string) ($pr['countrycode'] ?? '')), ['AT', 'DE'], true)) continue;
+      $teile = array_values(array_unique(array_filter([$pr['name'] ?? '', $pr['city'] ?? '', $pr['county'] ?? '', $pr['state'] ?? '', $pr['country'] ?? ''])));
+      $o[] = [(float) $c[1], (float) $c[0], (string) ($pr['name'] ?? ''), implode(', ', $teile)];
+    }
+    return $o;
   };
   $h = $istHome ? null : q('SELECT lat, lon FROM fb_koordinaten WHERE username = ? AND ort_key = ? AND lat IS NOT NULL', [$n, norm_ort($home)])->fetch();
-  $hit = null; $entf = null; $hinweis = '';
+  $hit = null; $entf = null; $hinweis = ''; $vorschlag = '';
   if (!$h) {
-    foreach ([['q' => "$suche, Österreich", 'countrycodes' => 'at'], ['q' => $suche, 'countrycodes' => 'at,de']] as $i => $p) {
-      if ($i > 0) usleep(1100000); // Nominatim: max. 1 Anfrage pro Sekunde
-      $r = $frage($p + ['limit' => 1]);
-      if ($r) { $hit = $r[0]; break; }
-    }
+    $kand = $nominatim(['q' => "$suche, Österreich", 'countrycodes' => 'at', 'limit' => 1]);
+    if (!$kand) { usleep(1100000); $kand = $nominatim(['q' => $suche, 'countrycodes' => 'at,de', 'limit' => 1]); }
+    if (!$kand) $kand = array_slice($photonFrage($suche, null, null), 0, 1);
+    $hit = $kand[0] ?? null;
     if (!$istHome && $hit) $hinweis = 'Wohnort noch nicht gefunden – Ort ohne Umkreis-Prüfung gesucht.';
   } else {
     $hl = (float) $h['lat']; $ho = (float) $h['lon'];
     $box = sprintf('%.4F,%.4F,%.4F,%.4F', $ho - 1.2, $hl + 0.8, $ho + 1.2, $hl - 0.8);
-    $treffer = $frage(['q' => $suche, 'viewbox' => $box, 'bounded' => 1, 'countrycodes' => 'at,de', 'limit' => 10]);
-    if (!$treffer) { usleep(1100000); $treffer = $frage(['q' => $suche, 'countrycodes' => 'at,de', 'limit' => 10]); }
-    foreach ($treffer as $t) {
-      $d = luftlinie_km($hl, $ho, (float) $t['lat'], (float) $t['lon']);
-      if ($entf === null || $d < $entf) { $entf = $d; $hit = $t; }
+    $kand = $nominatim(['q' => $suche, 'viewbox' => $box, 'bounded' => 1, 'countrycodes' => 'at,de', 'limit' => 10]);
+    $kand = array_merge($kand, $photonFrage($suche, $hl, $ho));
+    $naechst = function ($kand) use ($hl, $ho) {
+      $best = null; $bd = null;
+      foreach ($kand as $t) { $d = luftlinie_km($hl, $ho, $t[0], $t[1]); if ($bd === null || $d < $bd) { $bd = $d; $best = $t; } }
+      return [$best, $bd];
+    };
+    [$hit, $entf] = $naechst($kand);
+    if (!$hit || $entf > MAX_ORT_ENTFERNUNG_KM) {
+      usleep(1100000);
+      [$h2, $e2] = $naechst($nominatim(['q' => $suche, 'countrycodes' => 'at,de', 'limit' => 10]));
+      if ($h2 && ($entf === null || $e2 < $entf)) { $hit = $h2; $entf = $e2; }
     }
     if ($hit && $entf > MAX_ORT_ENTFERNUNG_KM) {
-      $hinweis = 'Nur ' . $hit['display_name'] . ' gefunden (' . round($entf) . ' km Luftlinie) – zu weit weg. Bitte einen genaueren Suchbegriff eintragen, z. B. „' . $ort . ' am …“ oder mit Postleitzahl.';
+      $hinweis = 'Nur „' . $hit[3] . '“ gefunden (' . round($entf) . ' km Luftlinie) – zu weit weg. Bitte genauer suchen, z. B. mit Zusatz („' . $ort . ' am …“) oder Postleitzahl.';
       $hit = null;
     }
   }
+  if (!$hit && !$hinweis) $hinweis = $dienstFehler
+    ? 'Kartendienst hat nicht geantwortet (' . implode(', ', array_map(function ($k, $v) { return "$k: $v"; }, array_keys($dienstFehler), $dienstFehler)) . ') – bitte später nochmal versuchen.'
+    : 'Nicht gefunden – Schreibweise prüfen (Tippfehler?) und mit „Ort korrigieren“ den richtigen Namen eintragen.';
+  // Anderer Name gefunden (z. B. Tippfehler "Seekrichen" -> "Seekirchen am Wallersee")? Als Korrektur vorschlagen
+  if ($hit && $hit[2] !== '' && $suche === $ort) {
+    $a = norm_ort($ort); $b = norm_ort($hit[2]);
+    if ($a !== $b && strpos($b, $a) !== 0 && strpos($a, $b) !== 0) {
+      $vorschlag = $hit[2];
+      $hinweis = "Gefunden als „{$hit[2]}“ – falls „{$ort}“ ein Tippfehler ist, mit „Ort korrigieren“ umbenennen.";
+    }
+  }
   $alt = q('SELECT lat, lon FROM fb_koordinaten WHERE username = ? AND ort_key = ?', [$n, norm_ort($ort)])->fetch();
-  q('REPLACE INTO fb_koordinaten (username, ort_key, ort, lat, lon, display_name) VALUES (?,?,?,?,?,?)',
-    [$n, norm_ort($ort), $ort, $hit ? (float) $hit['lat'] : null, $hit ? (float) $hit['lon'] : null, $hit ? (string) $hit['display_name'] : '']);
+  q('REPLACE INTO fb_koordinaten (username, ort_key, ort, lat, lon, display_name, hinweis) VALUES (?,?,?,?,?,?,?)',
+    [$n, norm_ort($ort), $ort, $hit ? $hit[0] : null, $hit ? $hit[1] : null, $hit ? $hit[3] : '', $hinweis]);
   // Neue Koordinaten -> alte (berechnete) Strecken dieses Orts verwerfen, sie werden neu berechnet
-  if ($alt && (!$hit || abs((float) $alt['lat'] - (float) $hit['lat']) > 0.001 || abs((float) $alt['lon'] - (float) $hit['lon']) > 0.001))
+  if ($alt && (!$hit || $alt['lat'] === null || abs((float) $alt['lat'] - $hit[0]) > 0.001 || abs((float) $alt['lon'] - $hit[1]) > 0.001))
     q("DELETE FROM fb_matrix WHERE username = ? AND (key_a = ? OR key_b = ?) AND quelle <> 'manuell'", [$n, norm_ort($ort), norm_ort($ort)]);
-  out(['ok' => (bool) $hit, 'ort' => $ort, 'treffer' => $hit ? (string) $hit['display_name'] : '', 'km' => $entf !== null && $hit ? round($entf) : null, 'hinweis' => $hinweis]);
+  out(['ok' => (bool) $hit, 'ort' => $ort, 'treffer' => $hit ? $hit[3] : '', 'km' => $entf !== null && $hit ? round($entf) : null,
+    'hinweis' => $hinweis, 'vorschlag' => $vorschlag, 'dienst_fehler' => (bool) $dienstFehler && !$hit]);
+}
+case 'ort_umbenennen': {
+  // Ortsnamen ueberall korrigieren: Keywords aller Jahre, Orte-Liste, HU, Routen gespeicherter Fahrten
+  $u = require_user(); $n = $u['username'];
+  $alt = trim((string) ($in['alt'] ?? '')); $neu = trim((string) ($in['neu'] ?? ''));
+  if ($alt === '' || $neu === '') fail(400, 'Bitte den richtigen Ortsnamen eintragen.');
+  if (strpbrk($neu, ":,\n") !== false || strpos($neu, ' - ') !== false) fail(400, 'Der Ortsname darf keinen Doppelpunkt, kein Komma und kein „ - “ enthalten.');
+  $ka = norm_ort($alt);
+  $z = ['keywords' => 0, 'fahrten' => 0, 'hu' => 0];
+  db()->beginTransaction();
+  // Keywords
+  foreach (q('SELECT jahr, settings_json FROM fb_gen_settings WHERE username = ?', [$n])->fetchAll() as $r) {
+    $d = json_decode((string) $r['settings_json'], true);
+    if (!is_array($d) || empty($d['keyword_text'])) continue;
+    $zeilen = preg_split('/\r?\n/', (string) $d['keyword_text']); $geaendert = false;
+    foreach ($zeilen as &$l) { $p = explode(':', $l, 2); if (count($p) === 2 && norm_ort($p[0]) === $ka) { $l = $neu . ':' . $p[1]; $geaendert = true; $z['keywords']++; } }
+    unset($l);
+    if ($geaendert) { $d['keyword_text'] = implode("\n", $zeilen); q('UPDATE fb_gen_settings SET settings_json = ? WHERE username = ? AND jahr = ?', [json_encode($d, JSON_UNESCAPED_UNICODE), $n, $r['jahr']]); }
+  }
+  // Orte-Liste
+  $vorh = q('SELECT ort FROM fb_orte WHERE username = ?', [$n])->fetchAll(PDO::FETCH_COLUMN);
+  $hatNeu = false; foreach ($vorh as $o) if (norm_ort($o) === norm_ort($neu)) $hatNeu = true;
+  foreach ($vorh as $o) if (norm_ort($o) === $ka) {
+    if ($hatNeu) q('DELETE FROM fb_orte WHERE username = ? AND ort = ?', [$n, $o]);
+    else q('UPDATE fb_orte SET ort = ?, km_einfach = 0 WHERE username = ? AND ort = ?', [$neu, $n, $o]);
+  }
+  // HU
+  foreach (q('SELECT id, werkstattort, stopps_vor_hu, stopps_nach_hu FROM fb_hu WHERE username = ?', [$n])->fetchAll() as $r) {
+    $f = function ($s) use ($ka, $neu) { return implode(',', array_map(function ($x) use ($ka, $neu) { return norm_ort($x) === $ka ? $neu : trim($x); }, explode(',', (string) $s))); };
+    $w = norm_ort($r['werkstattort']) === $ka ? $neu : $r['werkstattort'];
+    $v = $r['stopps_vor_hu'] === '' ? '' : $f($r['stopps_vor_hu']); $na = $r['stopps_nach_hu'] === '' ? '' : $f($r['stopps_nach_hu']);
+    if ($w !== $r['werkstattort'] || $v !== $r['stopps_vor_hu'] || $na !== $r['stopps_nach_hu']) { q('UPDATE fb_hu SET werkstattort = ?, stopps_vor_hu = ?, stopps_nach_hu = ? WHERE id = ?', [$w, $v, $na, $r['id']]); $z['hu']++; }
+  }
+  // Routen gespeicherter Fahrten (Zweck in Klammern und "Feiertag:"/"Urlaub:" bleiben)
+  $st = db()->prepare('UPDATE fb_fahrten SET route = ? WHERE id = ?');
+  foreach (q('SELECT id, route FROM fb_fahrten WHERE username = ? AND route LIKE ?', [$n, '%' . $alt . '%'])->fetchAll() as $r) {
+    $pre = ''; $route = (string) $r['route'];
+    if (preg_match('/^((?:Feiertag|Urlaub):\s*)(.*)$/su', $route, $m)) { $pre = $m[1]; $route = $m[2]; }
+    $teile = explode(' - ', $route); $geaendert = false;
+    foreach ($teile as &$t) if (preg_match('/^(.*?)(\s*\([^)]*\))?$/su', $t, $m) && norm_ort($m[1]) === $ka) { $t = $neu . ($m[2] ?? ''); $geaendert = true; }
+    unset($t);
+    if ($geaendert) { $st->execute([$pre . implode(' - ', $teile), $r['id']]); $z['fahrten']++; }
+  }
+  // Alte Kartendaten verwerfen
+  q('DELETE FROM fb_koordinaten WHERE username = ? AND ort_key = ?', [$n, $ka]);
+  q('DELETE FROM fb_matrix WHERE username = ? AND (key_a = ? OR key_b = ?)', [$n, $ka, $ka]);
+  db()->commit();
+  out(['ok' => true, 'zaehler' => $z, 'message' => "„{$alt}“ → „{$neu}“: {$z['keywords']} Keyword-Zeile(n), {$z['fahrten']} Fahrt(en), {$z['hu']} HU-Eintrag/Einträge geändert."]);
 }
 case 'geo_liste': {
   // Orte-Check: wo wurde jeder Ort gefunden und wie weit liegt er vom Wohnort?
   $u = require_user(); $n = $u['username']; $st = stammdaten($n);
   $home = ort_clean((string) $st['wohnort']);
   $k = [];
-  foreach (q('SELECT ort_key, ort, lat, lon, display_name FROM fb_koordinaten WHERE username = ?', [$n])->fetchAll() as $r) $k[$r['ort_key']] = $r;
+  foreach (q('SELECT ort_key, ort, lat, lon, display_name, hinweis FROM fb_koordinaten WHERE username = ?', [$n])->fetchAll() as $r) $k[$r['ort_key']] = $r;
   $h = $k[norm_ort($home)] ?? null;
   $orte = [];
   $kmE = [];
@@ -387,7 +473,7 @@ case 'geo_liste': {
   foreach (orte_quellen($n, $st) as $key => $v) {
     $r = $k[$key] ?? null;
     $d = ($r && $r['lat'] !== null && $h && $h['lat'] !== null) ? round(luftlinie_km((float) $h['lat'], (float) $h['lon'], (float) $r['lat'], (float) $r['lon'])) : null;
-    $orte[$key] = ['ort' => $v['ort'], 'quellen' => $v['quellen'], 'gefunden' => $r ? (string) $r['display_name'] : null, 'luftlinie' => $d, 'km_einfach' => $kmE[$key] ?? null];
+    $orte[$key] = ['ort' => $v['ort'], 'quellen' => $v['quellen'], 'gefunden' => $r ? (string) $r['display_name'] : null, 'luftlinie' => $d, 'km_einfach' => $kmE[$key] ?? null, 'hinweis' => $r ? (string) ($r['hinweis'] ?? '') : ''];
   }
   // Problemfaelle zuerst
   uasort($orte, function ($a, $b) {
@@ -505,7 +591,7 @@ case 'generieren': {
   foreach ($neu as $m => $rows) $daten[$m] = $rows;
   $anker = anker($n, $jahr);
   [$daten, $ende] = speichere_mit_kette($n, $jahr, $daten);
-  out(['ok' => true, 'monate' => (object) $daten, 'jahre' => jahre($n), 'flags' => (object) pruefung($daten), 'fehlende' => $fehlende, 'verdacht' => $verdacht,
+  out(['ok' => true, 'monate' => (object) $daten, 'jahre' => jahre($n), 'flags' => (object) pruefung($daten), 'fehlende' => array_map(function ($o) use ($n) { $q = orte_quellen($n, stammdaten($n))[norm_ort($o)]['quellen'] ?? []; return ['ort' => $o, 'quellen' => $q]; }, $fehlende), 'verdacht' => $verdacht,
     'ende' => (object) $ende, 'anker' => (object) $anker, 'generiert' => $monate]);
 }
 case 'monat_save': {

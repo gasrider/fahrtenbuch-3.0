@@ -59,8 +59,9 @@ for r in SB["fahrten"]:
 km = {69: 24659, 70: 206371, 71: 78607}
 for r in sorted(SB["fahrten"], key=lambda r: r["datum"]):
     r["abfahrt_km"] = km[r["fahrzeug_id"]]; km[r["fahrzeug_id"]] += r["km_d"] + r["km_p"]
+SB["fahrten"][40]["route"] = "Feiertag: Zell am Moos - Seekrichen am Wallersee (Angebot) - Zell am Moos"
 SB["hu_corrections"] = [{"username": U, "fahrzeug_id": 70, "datum": "2026-12-20", "km_at_hu": 216000, "werkstattort": "Mondsee", "stopps_vor_hu": "", "stopps_nach_hu": ""}]
-SB["generation_settings"][0]["settings_json"] = json.dumps({"target_km_min": 1650, "target_km_max": 2000, "modus": "Ganzes Jahr", "keyword_text": "Eugendorf:KFZ\nNeumarkt:Schaden\nSchleedorf:Antrag"})
+SB["generation_settings"][0]["settings_json"] = json.dumps({"target_km_min": 1650, "target_km_max": 2000, "modus": "Ganzes Jahr", "keyword_text": "Eugendorf:KFZ\nNeumarkt:Schaden\nSchleedorf:Antrag\nSeekrichen am Wallersee:Angebot\nKirchberg bei Mattighofena:KB"})
 ORTE_EXTRA = True
 
 
@@ -76,11 +77,20 @@ ORTE = {  # Name -> Liste von Treffern (Reihenfolge wie Nominatim: der "wichtigs
     "eugendorf": [(47.867, 13.125, "Eugendorf, Salzburg")],
     "mondsee": [(47.856, 13.350, "Mondsee, Oberösterreich")],
     "henndorf": [(47.906, 13.188, "Henndorf am Wallersee, Salzburg")],
-    "neumarkt": [(47.073, 14.427, "Neumarkt in der Steiermark, Steiermark"), (47.945, 13.225, "Neumarkt am Wallersee, Salzburg")],
+    "neumarkt": [(47.073, 14.427, "Neumarkt in der Steiermark, Steiermark")],  # wie echt: ohne Zusatz nur Steiermark
     "weitweg": [(47.071, 15.439, "Weitweg, Graz, Steiermark")],
     "weitweg bei salzburg": [(47.810, 13.040, "Weitweg, Salzburg")],
     "schleedorf": [(47.953, 13.150, "Schleedorf, Salzburg")],
+    "seekirchen am wallersee": [(47.900, 13.133, "Seekirchen am Wallersee, Salzburg")],
     "frankenmarkt": [(47.986, 13.420, "Frankenmarkt, Oberösterreich")],
+}
+
+
+# Photon: bevorzugt Treffer nahe lat/lon, verzeiht Tippfehler
+PHOTON = {
+    "neumarkt": [(47.073, 14.427, "Neumarkt in der Steiermark", "Steiermark"), (47.945, 13.225, "Neumarkt am Wallersee", "Salzburg")],
+    "seekrichen am wallersee": [(47.900, 13.133, "Seekirchen am Wallersee", "Salzburg")],
+    "kirchberg bei mattighofen": [(48.080, 13.130, "Kirchberg bei Mattighofen", "Oberösterreich")],
 }
 
 
@@ -89,6 +99,14 @@ class FakeGeo(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urllib.parse.urlsplit(self.path); q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+        if u.path.endswith("/api/"):
+            name = q["q"].strip().lower()
+            if name == "fehlerort":
+                self.send_response(503); self.end_headers(); return
+            feats = [{"geometry": {"coordinates": [o, a]}, "properties": {"name": nm, "state": stt, "country": "Österreich", "countrycode": "AT"}} for a, o, nm, stt in PHOTON.get(name, [])]
+            data = json.dumps({"features": feats}).encode(); self.send_response(200); self.end_headers(); self.wfile.write(data); return
+        if u.path.endswith("/search") and q["q"].lower().startswith("fehlerort"):
+            self.send_response(429); self.end_headers(); return
         if u.path.endswith("/search"):
             name = q["q"].replace(", Österreich", "").strip().lower()
             res = ORTE.get(name, [])
@@ -175,7 +193,7 @@ try:
     check(not os.path.exists(os.path.join(APP, "installieren.php")), "Installer hat sich selbst gelöscht")
     check(os.path.exists(os.path.join(APP, "server", "config.php")), "server/config.php erzeugt")
     with open(os.path.join(APP, "server", "config.php")) as f: cfg = f.read()
-    with open(os.path.join(APP, "server", "config.php"), "w") as f: f.write(cfg.replace(");", f"  'test_supabase' => true,\n  'osrm_block' => 3,\n  'nominatim_url' => 'http://127.0.0.1:{GEOPORT}',\n  'osrm_url' => 'http://127.0.0.1:{GEOPORT}',\n);"))
+    with open(os.path.join(APP, "server", "config.php"), "w") as f: f.write(cfg.replace(");", f"  'test_supabase' => true,\n  'osrm_block' => 3,\n  'nominatim_url' => 'http://127.0.0.1:{GEOPORT}',\n  'osrm_url' => 'http://127.0.0.1:{GEOPORT}',\n  'photon_url' => 'http://127.0.0.1:{GEOPORT}',\n);"))
 
     c, d = api("login", {"username": "christian mayerhofer", "password": "falsch"})
     check(c == 401, "falsches Passwort abgelehnt")
@@ -233,7 +251,7 @@ try:
 
     def geo_lauf(alle_neu, zusatz=()):
         c, plan = api("geo_plan", {"alle_neu": alle_neu, "zusatz": list(zusatz)}, T)
-        check(plan["zu_suchen"][0] == "Zell am Moos" if plan["zu_suchen"] else True, "Wohnort wird zuerst gesucht")
+        if alle_neu: check(plan["zu_suchen"][0] == "Zell am Moos", "Wohnort wird zuerst gesucht")
         res = {}
         for o in plan["zu_suchen"]:
             c, r = api("geo_one", {"ort": o}, T); res[o] = r
@@ -243,9 +261,28 @@ try:
     res, r = geo_lauf(True, ["Weitweg"])
     check("Neumarkt am Wallersee" in res["Neumarkt"]["treffer"], f"„Neumarkt“ = Neumarkt am Wallersee ({res['Neumarkt']['treffer']}, {res['Neumarkt']['km']} km)")
     check(not res["Weitweg"]["ok"] and "zu weit" in res["Weitweg"]["hinweis"], "Ort 180 km entfernt wird abgelehnt mit Hinweis")
+    s_ = res["Seekrichen am Wallersee"]
+    check(s_["ok"] and s_["vorschlag"] == "Seekirchen am Wallersee", f"Tippfehler Seekrichen: Photon findet ihn, Vorschlag {s_['vorschlag']}")
+    k_ = res["Kirchberg bei Mattighofena"]
+    check(not k_["ok"] and "Tippfehler" in k_["hinweis"], "Mattighofena nicht gefunden - Hinweis auf Tippfehler")
+    c, r = api("ort_umbenennen", {"alt": "Kirchberg bei Mattighofena", "neu": "Kirchberg bei Mattighofen"}, T)
+    check(c == 200 and r["zaehler"]["keywords"] == 1, "Ort korrigieren: " + r.get("message", str(r)))
+    c, r = api("ort_umbenennen", {"alt": "Seekrichen am Wallersee", "neu": "Seekirchen am Wallersee"}, T)
+    check(c == 200 and r["zaehler"]["fahrten"] == 1, "Seekrichen korrigiert: " + r.get("message", str(r)))
+    c, J = api("jahr_get", query={"jahr": 2026}, token=T)
+    r40 = [x for x in J["monate"][str(SB["fahrten"][40]["monat"])] if x["datum"] == SB["fahrten"][40]["datum"]][0]
+    check(r40["route"] == "Feiertag: Zell am Moos - Seekirchen am Wallersee (Angebot) - Zell am Moos", "Route einer gespeicherten Fahrt korrigiert (Zweck + Feiertag bleiben)")
+    check("Seekirchen am Wallersee:Angebot" in J["settings"]["keyword_text"] and "Mattighofena" not in J["settings"]["keyword_text"], "Keywords korrigiert")
+    c, d = api("geo_liste", token=T)
+    namen = [o["ort"] for o in d["orte"]]
+    check("Seekrichen am Wallersee" not in namen and "Kirchberg bei Mattighofena" not in namen, "falsche Namen verschwinden aus dem Orte-Check")
+    res2, r = geo_lauf(False)
+    check(res2.get("Kirchberg bei Mattighofen", {}).get("ok") and res2.get("Seekirchen am Wallersee", {}).get("ok"), "korrigierte Orte werden gefunden")
+    c, r = api("geo_one", {"ort": "Fehlerort"}, T)
+    check(not r["ok"] and r["dienst_fehler"] and "nicht geantwortet" in r["hinweis"], "Ausfall des Kartendienstes wird gemeldet: " + r["hinweis"][:70])
     c, d = api("fz_get", token=T)
     mx = {(m["ort_a"], m["ort_b"]): m["km"] for m in d["matrix"]}
-    check(max(mx.values()) < 120 and len(mx) == 15, f"alle Strecken plausibel, max. {max(mx.values())} km ({len(mx)} Strecken, blockweise berechnet)")
+    check(max(mx.values()) < 120 and len(mx) >= 15, f"alle Strecken plausibel, max. {max(mx.values())} km ({len(mx)} Strecken, blockweise berechnet)")
     check(any("Schleedorf" in k for k in mx), "Keyword-Ort Schleedorf hat Strecken bekommen")
     # Abgleich + Korrektur der Dezember-Fahrten 2026
     c, A = api("abgleich", {"jahr": 2026}, T)
@@ -274,7 +311,8 @@ try:
          "urlaub_fahrzeug_name": "VW Polo", "urlaub_km_min": 30, "urlaub_km_max": 80, "keyword_text": "Straßwalchen:Büro\nEugendorf:KFZ,Angebot\nMondsee:Antrag\nHenndorf:KB\nNeumarkt:Schaden"}
     c, d = api("generieren", {"jahr": 2025, "settings": S}, T)
     check(c == 200 and len(d["monate"]) == 12, "ganzes Jahr 2025 generiert")
-    check("Henndorf" in d["fehlende"], "fehlende Distanz (Henndorf) wird gemeldet")
+    hf = [f for f in d["fehlende"] if f["ort"] == "Henndorf"]
+    check(hf and "Keywords" in hf[0]["quellen"], "fehlende Distanz (Henndorf) wird mit Herkunft gemeldet")
     check(any("Neumarkt" in v for v in d["verdacht"]), f"falsche Neumarkt-Strecke (291 km) erkannt: {d['verdacht']}")
     maxd = max(r["km_d"] for rows in d["monate"].values() for r in rows)
     check(maxd < 360, f"keine Fahrt mit hunderten Dienst-km (max. {maxd} km)")
