@@ -21,6 +21,7 @@ if (cfg('db_name', '') === '') fail(503, 'Die App ist noch nicht installiert. Bi
 $action = (string) ($_GET['action'] ?? '');
 $in = json_input();
 $pdo = db();
+schema_sicherstellen();
 
 /* ---------- Daten-Helfer ---------- */
 function q(string $sql, array $args = []): PDOStatement { $st = db()->prepare($sql); $st->execute($args); return $st; }

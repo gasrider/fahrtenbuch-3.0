@@ -36,7 +36,7 @@ tests/ui.mjs             ← Playwright gegen laufende Instanz (KEEP=1 python3 t
 - `ort_umbenennen`: korrigiert einen Ortsnamen überall (Keywords aller Jahre, fb_orte, fb_hu, Routen in fb_fahrten), verwirft alte Koordinaten/Strecken.
 - Element.prototype.append/replaceChildren sind gepatcht (null/false werden übersprungen) – sonst erscheint „null“ als Text.
 - Sicherung/Wiederherstellung (JSON, nur eigene Daten) im Tab Stammdaten.
-- Schema-Änderungen idempotent in `create_schema()` (läuft auch beim Update).
+- Schema-Änderungen idempotent in `create_schema()` UND `SCHEMA_VERSION` in lib.php hochzählen. `schema_sicherstellen()` läuft bei jedem API-Aufruf – nötig, weil der Installer beim Update noch die ALTE lib.php geladen hat (deshalb fehlte einmal die Spalte `hinweis`).
 
 ## Definition of Done
 `php -l` auf allen PHP-Dateien, JS-Check (`sed -n '/^<script>$/,/^<\/script>$/p' app/index.html | sed '1d;$d' > /tmp/a.js && node --check /tmp/a.js`),

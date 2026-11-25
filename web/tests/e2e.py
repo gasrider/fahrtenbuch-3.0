@@ -195,6 +195,8 @@ try:
     with open(os.path.join(APP, "server", "config.php")) as f: cfg = f.read()
     with open(os.path.join(APP, "server", "config.php"), "w") as f: f.write(cfg.replace(");", f"  'test_supabase' => true,\n  'osrm_block' => 3,\n  'nominatim_url' => 'http://127.0.0.1:{GEOPORT}',\n  'osrm_url' => 'http://127.0.0.1:{GEOPORT}',\n  'photon_url' => 'http://127.0.0.1:{GEOPORT}',\n);"))
 
+    # Alte Datenbank ohne neue Spalte (so wie nach einem Update mit altem Installer-Stand)
+    subprocess.run(["mysql", "-uroot", "fb_e2e", "-e", "ALTER TABLE fb_koordinaten DROP COLUMN hinweis; DELETE FROM fb_system WHERE k = 'schema_version';"], check=True)
     c, d = api("login", {"username": "christian mayerhofer", "password": "falsch"})
     check(c == 401, "falsches Passwort abgelehnt")
     c, d = api("login", {"username": "Christian Mayerhofer", "password": "geheim123"})
@@ -243,6 +245,7 @@ try:
 
     # ---------- Online-Distanzen / Orte-Check ----------
     c, d = api("geo_liste", token=T)
+    check(c == 200, "fehlende Spalte wird automatisch ergänzt (kein „Unknown column hinweis“)")
     quellen = {o["ort"]: o["quellen"] for o in d["orte"]}
     check("Schleedorf" in quellen and "Keywords" in quellen["Schleedorf"], "Orte-Check zeigt auch Orte aus den Keywords")
     check("Fahrten" in quellen.get("Neumarkt", []) and "Mondsee" in quellen and "HU" in quellen["Mondsee"], "… und Orte aus Fahrten und HU")

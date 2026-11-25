@@ -27,6 +27,18 @@ function db(): PDO {
   return $pdo;
 }
 
+// Schema-Version: bei jeder Aenderung an Tabellen/Spalten hochzaehlen. Die App prueft sie bei
+// jedem Aufruf selbst (schema_sicherstellen) - so greifen Migrationen auch dann, wenn der
+// Installer beim Update noch die alte lib.php geladen hatte.
+const SCHEMA_VERSION = 2;
+function schema_sicherstellen(): void {
+  try { $v = (int) db()->query("SELECT v FROM fb_system WHERE k = 'schema_version'")->fetchColumn(); }
+  catch (Throwable $e) { $v = 0; }
+  if ($v >= SCHEMA_VERSION) return;
+  create_schema();
+  db()->prepare("INSERT INTO fb_system (k, v) VALUES ('schema_version', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute([(string) SCHEMA_VERSION]);
+}
+
 // Alle Tabellen (idempotent). Praefix fb_, damit die Datenbank mit anderen Apps geteilt werden kann.
 function create_schema(): void {
   $db = db();
