@@ -27,7 +27,8 @@ tests/ui.mjs             ← Playwright gegen laufende Instanz (KEEP=1 python3 t
 - Alte Streamlit-Passwörter: `sha256:<hex>` in fb_users.pass_hash, beim Login auf password_hash umgestellt.
 - Ortssuche (geo_one): Wohnort zuerst; andere Orte nur im Umkreis (viewbox), nächster Treffer gewinnt, > 100 km Luftlinie wird abgelehnt. Grund: „Neumarkt“ landete in der Steiermark (≈ 290 km) → Fahrten mit hunderten Dienst-km.
 - Strecken > PLAUSI_LEG_KM (120 km) ignoriert Generator und HU (Warnung „verdacht“); Prüfung meldet Dienstfahrten > 360 km.
-- HU skaliert nur km, nie die Fahrzeit (sonst 14:00-Fahrten); Fahrzeit nur bei > 100 km/h verlängert.
+- HU (Wunsch Betreiber): Tacho MEHR als eingetragen → Dienstfahrten bleiben, Differenz als Privatfahrten über den Zeitraum seit Jahresbeginn/letzter HU des Fahrzeugs (`hu_privat_dazu`: Tage ohne Dienstfahrt/Arbeitsweg, ab 2.500 km auch Ausflüge 300–800 km). Tacho WENIGER → zuerst Privat-km kürzen (`hu_kuerzen`, max. 80 %), dann Dienstfahrten (Faktor ≥ 0,5). Fahrten nach der HU unverändert. Keine eigene Fahrt am HU-Tag → eigene HU-Zeile, nie Fahrt eines anderen Fahrzeugs umbauen.
+- Privatfahrten bekommen bei jeder km-Änderung neue, passende Fahrzeit (`privat_zeiten_frei`).
 - Orte kommen aus vielen Quellen (`orte_quellen()`): Orte-Liste, Keywords aller Jahre, HU, Routen gespeicherter Fahrten. geo_plan nimmt alle auf (und trägt sie in fb_orte ein), Orte-Check zeigt sie mit Herkunft.
 - Gesamt-Abgleich (`fahrten_abgleich()`): erwartete km = Strecke laut Matrix × Median-Faktor des Monats; auffällig > 2,2× oder > 360 km. Korrektur setzt km, baut Kette neu und richtet HUs des Jahres neu aus (`wende_hu_an(..., true)`).
 - Speichern immer über `speichere_mit_kette()`: zieht die Kette auch in Folgejahren mit Daten nach.

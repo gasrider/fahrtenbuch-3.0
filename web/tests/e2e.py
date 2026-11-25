@@ -380,34 +380,57 @@ try:
     check(br == 0 and s == 6000, f"Privat-Summe exakt 6000 ({s}), Kette lückenlos")
 
     # ---------- HU ----------
+    # Fall wie beim echten Fahrtenbuch: Tacho zeigt viel MEHR als generiert (Fz 69, zwei HUs),
+    # und ein Fahrzeug, bei dem der Tacho etwas WENIGER zeigt (Fz 71)
     anker = {int(k): v for k, v in J4["anker"].items()}
-    vor = sum(r["km_d"] + r["km_p"] for rows in J4["monate"].values() for r in rows if r["fahrzeug_id"] == 69 and r["datum"] < "2025-06-10")
-    hu_km = anker[69] + int(vor * 1.08)
-    c, d = api("hu_save", {"hu": [{"fahrzeug_id": 69, "datum": "2025-06-10", "km_at_hu": hu_km, "werkstattort": "Mondsee", "stopps_vor_hu": "Eugendorf", "stopps_nach_hu": ""}]}, T)
-    check(c == 200, "HU gespeichert")
-    vorher = {(r["datum"], r["fahrzeug_id"]): r for rows in J4["monate"].values() for r in rows}
+    def summe(J, fid, bis, von=""):
+        return sum(r["km_d"] + r["km_p"] for rows in J["monate"].values() for r in rows if r["fahrzeug_id"] == fid and von < r["datum"] < bis)
+    hu1 = anker[69] + int(summe(J4, 69, "2025-06-10") * 1.6)
+    hu2 = hu1 + 200 + summe(J4, 69, "2025-11-20", "2025-06-10") + 3000
+    hu3 = anker[71] + int(summe(J4, 71, "2025-09-15") * 0.97)
+    c, d = api("hu_save", {"hu": [{"fahrzeug_id": 69, "datum": "2025-06-10", "km_at_hu": hu1, "werkstattort": "Mondsee", "stopps_vor_hu": "Eugendorf", "stopps_nach_hu": ""},
+                                  {"fahrzeug_id": 69, "datum": "2025-11-20", "km_at_hu": hu2, "werkstattort": "Mondsee", "stopps_vor_hu": "", "stopps_nach_hu": ""},
+                                  {"fahrzeug_id": 71, "datum": "2025-09-15", "km_at_hu": hu3, "werkstattort": "Mondsee", "stopps_vor_hu": "", "stopps_nach_hu": ""}]}, T)
+    check(c == 200, "3 HU-Einträge gespeichert")
+    vorher = [dict(r) for rows in J4["monate"].values() for r in rows]
+    dienst_vorher = {(r["datum"], r["fahrzeug_id"], r["route"]): (r["km_d"], r["dauer"]) for r in vorher if r["km_d"] > 0 and r["fahrzeug_id"] == 69}
     c, d = api("hu_anwenden", {}, T)
-    check(c == 200, "HU angewendet")
-    c, JH = api("jahr_get", query={"jahr": 2025}, token=T)
-    geaendert = 0; gesamt = 0
-    for rows in JH["monate"].values():
-        for r in rows:
-            v = vorher.get((r["datum"], r["fahrzeug_id"]))
-            if not v or "(HU)" in r["route"] or r["fahrzeug_id"] != 69: continue
-            t = r["km_d"] + r["km_p"]; dm = int(r["dauer"][:2]) * 60 + int(r["dauer"][3:])
-            vt = v["km_d"] + v["km_p"]; vdm = int(v["dauer"][:2]) * 60 + int(v["dauer"][3:])
-            if dm and t / dm * 60 <= 100 and vdm and vt / vdm * 60 <= 100:  # nur Fahrten, die vorher plausibel waren
-                gesamt += 1; geaendert += r["dauer"] != v["dauer"]
-    check(gesamt > 50 and geaendert == 0, f"HU verändert keine Fahrzeiten ({gesamt} Fahrten geprüft)")
+    check(c == 200, "HU angewendet: " + " | ".join(m for m in d["meldungen"] if "verteilt" in m or "gekürzt" in m)[:300])
     br, _, _, J5 = kette_ok(2025)
-    hu = [r for rows in J5["monate"].values() for r in rows if "(HU)" in r["route"]]
-    hin = 25 + 15  # Zell->Eugendorf (Matrix 25) + Eugendorf->Mondsee (|8-15| -> min 5 -> 7?)
-    abf = hu[0]["abfahrt_km"] if hu else 0
-    check(len(hu) == 1 and br == 0, "genau eine HU-Fahrt, Kette lückenlos")
-    meld = " ".join(d["meldungen"])
-    import re
-    m = re.search(r"minus (\d+) km Weg", meld)
-    check(m and abf + int(m.group(1)) == hu_km, f"Tacho bei Ankunft Werkstatt = HU-Stand exakt ({abf}+{m.group(1) if m else '?'} = {hu_km})")
+    check(br == 0, "Kette nach HU lückenlos")
+    alle = [r for rows in J5["monate"].values() for r in rows]
+    hus = sorted([r for r in alle if "(HU)" in r["route"]], key=lambda r: r["datum"])
+    hin = [int(x) for x in re.findall(r"minus (\d+) km Weg", " ".join(d["meldungen"]))]
+    ziele = {"2025-06-10": hu1, "2025-09-15": hu3, "2025-11-20": hu2}
+    korr = sorted([("2025-06-10", 69), ("2025-11-20", 69), ("2025-09-15", 71)])
+    exakt = [hus[k]["abfahrt_km"] + hin[k] == ziele[hus[k]["datum"]] for k in range(len(hus))] if len(hus) == 3 and len(hin) == 3 else [False]
+    check(all(exakt), f"alle 3 HUs: Tacho bei Ankunft Werkstatt exakt ({[(h['datum'], h['abfahrt_km']) for h in hus]}, Weg {hin})")
+    geaendert = [(k, v, ) for r in alle if r["km_d"] > 0 and "(HU)" not in r["route"]
+                 for k in [(r["datum"], r["fahrzeug_id"], r["route"])] if k in dienst_vorher and dienst_vorher[k] != (r["km_d"], r["dauer"]) for v in [dienst_vorher[k]]]
+    check(not geaendert, f"Fz 69 (Tacho mehr): Dienstfahrten (km + Fahrzeit) unverändert ({len(dienst_vorher)} geprüft, geändert: {geaendert[:3]})")
+    neue = [r for r in alle if r["fahrzeug_id"] == 69 and r["km_p"] > 0 and r["datum"] < "2025-11-20"]
+    check(all(r["km_d"] == 0 or "(HU)" in r["route"] or "Büro" in r["route"] for r in neue), "Mehr-km nur als Privatfahrten")
+    priv_m = {}
+    for r in alle:
+        if r["fahrzeug_id"] == 69 and r["datum"] < "2025-06-10": priv_m[r["datum"][5:7]] = priv_m.get(r["datum"][5:7], 0) + r["km_p"]
+    check(len([v for v in priv_m.values() if v > 300]) >= 4, f"Privat-km über die Monate verteilt: {priv_m}")
+    ausfl = [r for r in alle if r["route"] == "Privatfahrt (Ausflug)"]
+    check(all(300 <= r["km_p"] <= 800 for r in ausfl), f"{len(ausfl)} Ausflüge, alle mit 300–800 km")
+    def dienst_monat(J):
+        o = {}
+        for rows in J["monate"].values():
+            for r in rows:
+                if "(HU)" not in r["route"]: o[r["datum"][5:7]] = o.get(r["datum"][5:7], 0) + r["km_d"]
+        return o
+    dm4, dm5 = dienst_monat(J4), dienst_monat(J5)
+    check(all(abs(dm5[k] - dm4[k]) <= (300 if k in ("06", "09", "11") else 25) for k in dm4), f"Dienst-km pro Monat unverändert (HU-Monate: HU-Fahrt ersetzt Tagesfahrt): vorher {dm4}, nachher {dm5}")
+    nach = [r for r in alle if r["fahrzeug_id"] == 69 and r["datum"] > "2025-11-20"]
+    nach_v = [r for r in vorher if r["fahrzeug_id"] == 69 and r["datum"] > "2025-11-20"]
+    check([(r["datum"], r["km_d"], r["km_p"]) for r in nach] == [(r["datum"], r["km_d"], r["km_p"]) for r in nach_v], "Fahrten nach der letzten HU unverändert")
+    check(any("bei Privatfahrten gekürzt" in m for m in d["meldungen"]), "Fz 71 (Tacho weniger): zuerst Privat-km gekürzt")
+    tg = [r for r in alle if r["km_p"] > 0 and r["km_d"] == 0]
+    schnell = [r for r in tg if (int(r["dauer"][:2]) * 60 + int(r["dauer"][3:])) and r["km_p"] / (int(r["dauer"][:2]) * 60 + int(r["dauer"][3:])) * 60 > 100]
+    check(not schnell, "Privatfahrten mit realistischer Fahrzeit")
     c, d = api("hu_anwenden", {}, T)
     br, _, _, J6 = kette_ok(2025)
     check("Bereits angewendet" in " ".join(d["meldungen"]) and J6["monate"] == J5["monate"], "2. Ausführung übersprungen, nichts verändert")

@@ -630,7 +630,7 @@ async function viewExport(main) {
     h('div', { class: 'card' }, h('h2', {}, 'PDF-Export'), h('div', { class: 'row' }, field('Jahr', jSel), field('Monat', mSel), bM, bJ),
       h('p', { class: 'hint' }, J.jahre.length ? 'Jahre mit Fahrten: ' + J.jahre.join(', ') : 'Noch keine Fahrten gespeichert.')),
     h('div', { class: 'card' }, h('h2', {}, 'HU-Korrekturen'), dl,
-      h('p', { class: 'hint' }, 'Passt die Kilometer an den echten Tacho-Stand bei der HU an: Vor dem HU-Datum wird so skaliert, dass der Tacho bei Ankunft in der Werkstatt genau den HU-Stand zeigt; danach kompensierend (Jahressumme bleibt). Der Weg zur Werkstatt zählt privat, Kundenstopps dienstlich. Eine HU wird nur EINMAL angewendet – ist am HU-Tag schon eine HU-Fahrt eingetragen, wird sie übersprungen.'),
+      h('p', { class: 'hint' }, 'Passt die Kilometer an den echten Tacho-Stand bei der HU an, sodass der Tacho bei Ankunft in der Werkstatt genau den HU-Stand zeigt. Zeigt der Tacho MEHR als eingetragen, bleiben die Dienstfahrten unverändert – die fehlenden km werden als Privatfahrten über den Zeitraum bis zur HU verteilt (seit Jahresbeginn bzw. seit der letzten HU des Fahrzeugs, bei großen Mengen auch einige Ausflüge). Zeigt er WENIGER, werden zuerst Privat-km gekürzt. Fahrten nach der HU bleiben unverändert. Der Weg zur Werkstatt zählt privat, Kundenstopps dienstlich. Eine HU wird nur EINMAL angewendet.'),
       huGrid.el, h('div', { class: 'row' }, h('button', { class: 'btn pri', onclick: e => busy(e.target, async () => { await api('hu_save', { hu: huGrid.get() }); toast('HU-Einträge gespeichert.'); }) }, 'HU-Einträge speichern'), bA), out));
 }
 
